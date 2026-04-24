@@ -379,11 +379,14 @@ source = { editable = "packages/agents" }
 dependencies = [
     { name = "anthropic" },
     { name = "fii-data-clients" },
+    { name = "fii-db" },
     { name = "fii-shared" },
     { name = "langgraph" },
     { name = "langgraph-checkpoint-postgres" },
+    { name = "psycopg", extra = ["binary", "pool"] },
     { name = "pydantic" },
     { name = "structlog" },
+    { name = "tenacity" },
 ]
 
 [package.optional-dependencies]
@@ -397,14 +400,17 @@ dev = [
 requires-dist = [
     { name = "anthropic", specifier = ">=0.42.0" },
     { name = "fii-data-clients", editable = "packages/data-clients" },
+    { name = "fii-db", editable = "packages/db" },
     { name = "fii-shared", editable = "packages/shared" },
     { name = "langgraph", specifier = ">=0.2.61" },
     { name = "langgraph-checkpoint-postgres", specifier = ">=2.0.7" },
+    { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2.3" },
     { name = "pydantic", specifier = ">=2.10.4" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.4" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.25.2" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9.2" },
     { name = "structlog", specifier = ">=24.4.0" },
+    { name = "tenacity", specifier = ">=9.0.0" },
 ]
 provides-extras = ["dev"]
 
@@ -431,6 +437,7 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "httpx" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -446,6 +453,7 @@ requires-dist = [
     { name = "fii-db", editable = "packages/db" },
     { name = "fii-shared", editable = "packages/shared" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28.1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14.1" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.3" },
     { name = "pydantic", specifier = ">=2.10.4" },
@@ -1562,6 +1570,9 @@ wheels = [
 [package.optional-dependencies]
 binary = [
     { name = "psycopg-binary", marker = "implementation_name != 'pypy'" },
+]
+pool = [
+    { name = "psycopg-pool" },
 ]
 
 [[package]]

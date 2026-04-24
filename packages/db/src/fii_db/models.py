@@ -89,7 +89,12 @@ class Ticker(Base, TimestampMixin):
     sector: Mapped[str | None] = mapped_column(Text)
     industry: Mapped[str | None] = mapped_column(Text)
     market_cap_bucket: Mapped[MarketCapBucket | None] = mapped_column(
-        PgEnum(MarketCapBucket, name="market_cap_bucket", native_enum=True),
+        PgEnum(
+            MarketCapBucket,
+            name="market_cap_bucket",
+            native_enum=True,
+            values_callable=lambda e: [m.value for m in e],
+        ),
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     cik: Mapped[str | None] = mapped_column(String(10), index=True)
@@ -164,7 +169,13 @@ class FundamentalsQuarterly(Base, TimestampMixin):
     )
     fiscal_period_end: Mapped[date] = mapped_column(Date, primary_key=True)
     statement_type: Mapped[StatementType] = mapped_column(
-        PgEnum(StatementType, name="statement_type", native_enum=True), primary_key=True
+        PgEnum(
+            StatementType,
+            name="statement_type",
+            native_enum=True,
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        primary_key=True,
     )
 
     currency: Mapped[str | None] = mapped_column(String(8))
@@ -209,7 +220,14 @@ class Filing(Base, TimestampMixin):
         String(10), ForeignKey("tickers.symbol", ondelete="CASCADE"), nullable=False, index=True
     )
     form_type: Mapped[FormType] = mapped_column(
-        PgEnum(FormType, name="form_type", native_enum=True), nullable=False, index=True
+        PgEnum(
+            FormType,
+            name="form_type",
+            native_enum=True,
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        nullable=False,
+        index=True,
     )
     filed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     period_of_report: Mapped[date | None] = mapped_column(Date)
@@ -371,10 +389,21 @@ class Analysis(Base, TimestampMixin):
         String(10), ForeignKey("tickers.symbol", ondelete="CASCADE"), nullable=False, index=True
     )
     analysis_type: Mapped[AnalysisType] = mapped_column(
-        PgEnum(AnalysisType, name="analysis_type", native_enum=True), nullable=False
+        PgEnum(
+            AnalysisType,
+            name="analysis_type",
+            native_enum=True,
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        nullable=False,
     )
     status: Mapped[AnalysisStatus] = mapped_column(
-        PgEnum(AnalysisStatus, name="analysis_status", native_enum=True),
+        PgEnum(
+            AnalysisStatus,
+            name="analysis_status",
+            native_enum=True,
+            values_callable=lambda e: [m.value for m in e],
+        ),
         nullable=False,
         server_default=AnalysisStatus.PENDING.value,
     )
@@ -383,10 +412,20 @@ class Analysis(Base, TimestampMixin):
 
     orchestrator_summary: Mapped[str | None] = mapped_column(Text)
     recommendation: Mapped[AnalysisRecommendation | None] = mapped_column(
-        PgEnum(AnalysisRecommendation, name="analysis_recommendation", native_enum=True)
+        PgEnum(
+            AnalysisRecommendation,
+            name="analysis_recommendation",
+            native_enum=True,
+            values_callable=lambda e: [m.value for m in e],
+        )
     )
     confidence: Mapped[Confidence | None] = mapped_column(
-        PgEnum(Confidence, name="confidence", native_enum=True)
+        PgEnum(
+            Confidence,
+            name="confidence",
+            native_enum=True,
+            values_callable=lambda e: [m.value for m in e],
+        )
     )
     fii_score: Mapped[Decimal | None] = mapped_column(Numeric(4, 2))
 
@@ -421,7 +460,13 @@ class AnalysisSpecialistOutput(Base, TimestampMixin):
         index=True,
     )
     specialist_name: Mapped[SpecialistName] = mapped_column(
-        PgEnum(SpecialistName, name="specialist_name", native_enum=True), nullable=False
+        PgEnum(
+            SpecialistName,
+            name="specialist_name",
+            native_enum=True,
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        nullable=False,
     )
 
     output_json: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
@@ -484,7 +529,13 @@ class AgentPrompt(Base, TimestampMixin):
     __tablename__ = "agent_prompts"
 
     specialist_name: Mapped[SpecialistName] = mapped_column(
-        PgEnum(SpecialistName, name="specialist_name", create_type=False, native_enum=True),
+        PgEnum(
+            SpecialistName,
+            name="specialist_name",
+            create_type=False,
+            native_enum=True,
+            values_callable=lambda e: [m.value for m in e],
+        ),
         primary_key=True,
     )
     version: Mapped[int] = mapped_column(Integer, primary_key=True)
