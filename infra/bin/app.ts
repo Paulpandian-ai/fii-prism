@@ -7,6 +7,7 @@ import { AuthStack } from "../lib/auth-stack";
 import { ComputeStack } from "../lib/compute-stack";
 import { ApiStack } from "../lib/api-stack";
 import { FrontendStack } from "../lib/frontend-stack";
+import { IngestionStack } from "../lib/ingestion-stack";
 
 const app = new cdk.App();
 
@@ -45,6 +46,16 @@ new ApiStack(app, `${prefix}-Api`, {
   envName,
   vpc: network.vpc,
   fargateService: compute.fargateService,
+});
+
+new IngestionStack(app, `${prefix}-Ingestion`, {
+  env,
+  envName,
+  vpc: network.vpc,
+  cluster: compute.cluster,
+  dbSecret: data.dbSecret,
+  dbSecurityGroup: data.dbSecurityGroup,
+  rawDataBucket: data.rawDataBucket,
 });
 
 new FrontendStack(app, `${prefix}-Frontend`, { env, envName });

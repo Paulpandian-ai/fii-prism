@@ -1,12 +1,18 @@
 [project]
 name = "fii-data-clients"
 version = "0.1.0"
-description = "Thin provider wrappers: Polygon, FMP, edgartools, FRED, Finnhub."
+description = "Thin provider wrappers: Polygon, FMP, edgartools, FRED, Finnhub, Voyage, Bedrock."
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "httpx>=0.28.1",
     "pydantic>=2.10.4",
     "structlog>=24.4.0",
+    "tenacity>=9.0.0",
+    "edgartools>=3.15.0",
+    "fredapi>=0.5.2",
+    "finnhub-python>=2.4.23",
+    "voyageai>=0.3.2",
+    "boto3>=1.35.89",
     "fii-shared",
 ]
 

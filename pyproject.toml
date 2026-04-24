@@ -9,13 +9,16 @@ dependencies = []
 [tool.uv.workspace]
 members = [
     "apps/api",
+    "apps/ingest",
     "packages/agents",
+    "packages/db",
     "packages/shared",
     "packages/data-clients",
 ]
 
 [tool.uv.sources]
 fii-shared = { workspace = true }
+fii-db = { workspace = true }
 fii-agents = { workspace = true }
 fii-data-clients = { workspace = true }
 
