@@ -1,15 +1,106 @@
 """Shared Pydantic schemas for FII-PRISM. Canonical domain types live here."""
 
+from fii_shared.orchestrator import (
+    EDUCATIONAL_DISCLAIMER,
+    CostSummary,
+    OrchestratorFinalOutput,
+    Recommendation,
+    TimeHorizon,
+)
+from fii_shared.primitives import (
+    CitedClaim,
+    CitedNumber,
+    CompParable,
+    Confidence,
+    FiveForces,
+    InsiderMove,
+    SourceRef,
+    SourceType,
+    Trend3,
+)
 from fii_shared.schemas import (
     AgentRunStatus,
     AnalysisRun,
     DeepDiveRequest,
     Ticker,
 )
+from fii_shared.specialists import (
+    BullBearDebateOutput,
+    DfastScenario,
+    FundamentalsOutput,
+    GoNoGo,
+    InsiderFlowOutput,
+    MacdSignal,
+    MacroOutput,
+    MacroRegime,
+    MoatOutput,
+    MoatTrend,
+    MoatType,
+    MoatWidth,
+    NewsSentimentOutput,
+    RatesTrajectory,
+    RiskOutput,
+    Signal,
+    SignalStrength,
+    TechnicalOutput,
+    TechRegime,
+    TrendShort,
+    ValuationOutput,
+)
+from fii_shared.validation import (
+    NumericClaimsMixin,
+    ReprompTicket,
+    try_parse,
+    validate_numeric_claims,
+)
 
 __all__ = [
+    "EDUCATIONAL_DISCLAIMER",
+    # existing (Section 1)
     "AgentRunStatus",
     "AnalysisRun",
+    # specialist outputs
+    "BullBearDebateOutput",
+    # primitives
+    "CitedClaim",
+    "CitedNumber",
+    "CompParable",
+    "Confidence",
+    # orchestrator
+    "CostSummary",
     "DeepDiveRequest",
+    "DfastScenario",
+    "FiveForces",
+    "FundamentalsOutput",
+    "GoNoGo",
+    "InsiderFlowOutput",
+    "InsiderMove",
+    "MacdSignal",
+    "MacroOutput",
+    "MacroRegime",
+    "MoatOutput",
+    "MoatTrend",
+    "MoatType",
+    "MoatWidth",
+    "NewsSentimentOutput",
+    # validation
+    "NumericClaimsMixin",
+    "OrchestratorFinalOutput",
+    "RatesTrajectory",
+    "Recommendation",
+    "ReprompTicket",
+    "RiskOutput",
+    "Signal",
+    "SignalStrength",
+    "SourceRef",
+    "SourceType",
+    "TechRegime",
+    "TechnicalOutput",
     "Ticker",
+    "TimeHorizon",
+    "Trend3",
+    "TrendShort",
+    "ValuationOutput",
+    "try_parse",
+    "validate_numeric_claims",
 ]

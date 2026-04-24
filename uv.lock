@@ -587,8 +587,17 @@ dependencies = [
     { name = "pydantic" },
 ]
 
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
 [package.metadata]
-requires-dist = [{ name = "pydantic", specifier = ">=2.10.4" }]
+requires-dist = [
+    { name = "pydantic", specifier = ">=2.10.4" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.4" },
+]
+provides-extras = ["dev"]
 
 [[package]]
 name = "filelock"

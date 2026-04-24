@@ -1,7 +1,7 @@
 import { z } from "zod";
 
-// Mirror of packages/shared/src/fii_shared/schemas.py. Keep in sync by hand for now;
-// we'll codegen from the Pydantic schemas in a later section if drift becomes a problem.
+// Analysis lifecycle types (mirror of fii_shared.schemas in Python). Kept separate from the
+// agent-output schemas because these are plumbing — request/response envelopes for the API.
 
 export const AgentRunStatus = z.enum([
   "pending",

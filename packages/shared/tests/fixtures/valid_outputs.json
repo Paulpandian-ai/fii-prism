@@ -1,0 +1,211 @@
+{
+  "_meta": {
+    "description": "One valid example per FII-PRISM schema. Consumed by both Python (Pydantic) and TS (zod) parity tests. Numbers chosen to be realistic for AAPL as-of 2024-09-28 10-K.",
+    "as_of": "2024-09-28"
+  },
+  "_shared": {
+    "sec_source": {
+      "source_type": "sec_filing",
+      "source_id": "0000320193-24-000123",
+      "section": "Item 7 MD&A",
+      "retrieved_at": "2026-04-24T12:00:00Z",
+      "url": "https://www.sec.gov/Archives/edgar/data/320193/000032019324000123/aapl-20240928.htm"
+    },
+    "fmp_source": {
+      "source_type": "fmp_fundamental",
+      "source_id": "fmp/income/AAPL/2024-09-28",
+      "section": "income",
+      "retrieved_at": "2026-04-24T12:01:00Z",
+      "url": "https://financialmodelingprep.com/api/v3/income-statement/AAPL"
+    },
+    "polygon_source": {
+      "source_type": "polygon_price",
+      "source_id": "polygon/aggs/AAPL/2026-04-23",
+      "section": null,
+      "retrieved_at": "2026-04-24T12:02:00Z",
+      "url": null
+    },
+    "fred_source": {
+      "source_type": "fred_series",
+      "source_id": "DGS10",
+      "section": null,
+      "retrieved_at": "2026-04-24T12:03:00Z",
+      "url": null
+    },
+    "news_source": {
+      "source_type": "finnhub_news",
+      "source_id": "finnhub/news/abc123",
+      "section": null,
+      "retrieved_at": "2026-04-24T12:04:00Z",
+      "url": "https://example.com/article"
+    }
+  },
+  "FundamentalsOutput": {
+    "symbol": "AAPL",
+    "revenue_ttm": {"value": 391000000000.0, "unit": "USD", "as_of": "2024-09-28", "source": {"source_type": "fmp_fundamental", "source_id": "fmp/income/AAPL/2024-09-28", "section": "income.revenue", "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "revenue_cagr_3y": {"value": 0.05, "unit": "ratio", "as_of": "2024-09-28", "source": {"source_type": "fmp_fundamental", "source_id": "fmp/income/AAPL/2024-09-28", "section": "derived.revenue_cagr_3y", "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "gross_margin_trend": "improving",
+    "gross_margin_latest": {"value": 0.46, "unit": "ratio", "as_of": "2024-09-28", "source": {"source_type": "fmp_fundamental", "source_id": "fmp/ratios/AAPL/2024-09-28", "section": "ratios.grossProfitMargin", "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "operating_margin_latest": {"value": 0.31, "unit": "ratio", "as_of": "2024-09-28", "source": {"source_type": "fmp_fundamental", "source_id": "fmp/ratios/AAPL/2024-09-28", "section": "ratios.operatingProfitMargin", "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "fcf_conversion": {"value": 1.1, "unit": "ratio", "as_of": "2024-09-28", "source": {"source_type": "calculated", "source_id": "fcf/net_income", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "net_debt_to_ebitda": {"value": -0.5, "unit": "ratio", "as_of": "2024-09-28", "source": {"source_type": "calculated", "source_id": "net_debt/ebitda", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "roic": {"value": 0.44, "unit": "ratio", "as_of": "2024-09-28", "source": {"source_type": "calculated", "source_id": "roic", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "roic_vs_wacc_spread": {"value": 0.35, "unit": "ratio", "as_of": "2024-09-28", "source": {"source_type": "calculated", "source_id": "roic_minus_wacc", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "interest_coverage": {"value": 28.0, "unit": "ratio", "as_of": "2024-09-28", "source": {"source_type": "calculated", "source_id": "interest_coverage", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "auditor_flags": [],
+    "accounting_red_flags": [],
+    "qualitative_summary": "Gross margin expanded modestly in fiscal 2024 from the prior year. Services continue to be the growth engine. Capital allocation is disciplined — buybacks and a small dividend absorb most free cash flow.",
+    "confidence": "high"
+  },
+  "ValuationOutput": {
+    "dcf_intrinsic_value_bear": {"value": 150.0, "unit": "USD", "as_of": "2026-04-24", "source": {"source_type": "calculated", "source_id": "dcf.bear", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "dcf_intrinsic_value_base": {"value": 195.0, "unit": "USD", "as_of": "2026-04-24", "source": {"source_type": "calculated", "source_id": "dcf.base", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "dcf_intrinsic_value_bull": {"value": 240.0, "unit": "USD", "as_of": "2026-04-24", "source": {"source_type": "calculated", "source_id": "dcf.bull", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "current_price": {"value": 210.0, "unit": "USD", "as_of": "2026-04-23", "source": {"source_type": "polygon_price", "source_id": "polygon/aggs/AAPL/2026-04-23", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "margin_of_safety_pct": {"value": -0.077, "unit": "ratio", "as_of": "2026-04-24", "source": {"source_type": "calculated", "source_id": "mos", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "wacc_used": {"value": 0.085, "unit": "ratio", "as_of": "2026-04-24", "source": {"source_type": "calculated", "source_id": "wacc", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "terminal_growth_used": {"value": 0.025, "unit": "ratio", "as_of": "2026-04-24", "source": {"source_type": "calculated", "source_id": "terminal_g", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "revenue_growth_assumption": {"value": 0.06, "unit": "ratio", "as_of": "2026-04-24", "source": {"source_type": "calculated", "source_id": "rev_growth_assumption", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "comparable_multiples": [
+      {"peer_symbol": "MSFT", "ev_ebitda": 22.0, "pe_ratio": 33.0},
+      {"peer_symbol": "GOOGL", "ev_ebitda": 14.0, "pe_ratio": 22.0}
+    ],
+    "reverse_dcf_implied_growth": {"value": 0.07, "unit": "ratio", "as_of": "2026-04-24", "source": {"source_type": "calculated", "source_id": "reverse_dcf", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "sensitivity_table": {"wacc_plus_1pct": 178.0, "wacc_minus_1pct": 215.0, "terminal_plus_1pct": 208.0},
+    "qualitative_summary": "The market is pricing mid-single-digit revenue growth with stable margins. Sensitivity to the discount rate is meaningful; a one-point hike takes the base case below the bull threshold.",
+    "confidence": "medium"
+  },
+  "MoatOutput": {
+    "moat_width": "wide",
+    "moat_trend": "stable",
+    "moat_types_present": ["brand", "switching_costs", "intangible_assets"],
+    "evidence_for": [
+      {"claim": "iPhone ecosystem retains users across devices and generations.", "sources": [{"source_type": "sec_filing", "source_id": "0000320193-24-000123", "section": "Item 1 Business", "retrieved_at": "2026-04-24T12:00:00Z", "url": null}], "confidence": "high"}
+    ],
+    "evidence_against": [
+      {"claim": "Regulatory action in the EU threatens App Store revenue take-rate.", "sources": [{"source_type": "sec_filing", "source_id": "0000320193-24-000123", "section": "Item 1A Risk Factors", "retrieved_at": "2026-04-24T12:00:00Z", "url": null}], "confidence": "medium"}
+    ],
+    "five_forces_summary": {
+      "threat_new_entrants": "low",
+      "bargaining_buyers": "medium",
+      "bargaining_suppliers": "low",
+      "threat_substitutes": "medium",
+      "competitive_rivalry": "high"
+    },
+    "qualitative_summary": "Brand and switching costs combine into a wide moat. The primary erosion vector is regulatory rather than competitive.",
+    "confidence": "high"
+  },
+  "MacroOutput": {
+    "regime": "late_cycle",
+    "regime_evidence": [
+      {"claim": "Unemployment has risen 40 basis points off its recent trough.", "sources": [{"source_type": "fred_series", "source_id": "UNRATE", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}], "confidence": "medium"}
+    ],
+    "rates_trajectory": "easing",
+    "stock_sector_macro_sensitivity": {"rates_10y": -0.3, "usd_broad": -0.2, "vix": -0.5},
+    "top_risks": [
+      {"claim": "A recession scenario would compress consumer-discretionary multiples.", "sources": [{"source_type": "fred_series", "source_id": "USRECD", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}], "confidence": "medium"}
+    ],
+    "top_tailwinds": [],
+    "qualitative_summary": "Regime indicators lean late-cycle. Easing policy could extend the cycle, but labor softness is the watch item.",
+    "confidence": "medium"
+  },
+  "TechnicalOutput": {
+    "trend_short": "up",
+    "trend_medium": "sideways",
+    "trend_long": "up",
+    "rsi_14": 58.2,
+    "macd_signal": "no_signal",
+    "adx": 22.0,
+    "realized_vol_30d": 0.21,
+    "atr_14": 4.3,
+    "support_levels": [198.0, 188.0],
+    "resistance_levels": [218.0, 230.0],
+    "suggested_entry": {"value": 205.0, "unit": "USD", "as_of": "2026-04-24", "source": {"source_type": "polygon_price", "source_id": "polygon/aggs/AAPL/2026-04-23", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "suggested_stop": {"value": 188.0, "unit": "USD", "as_of": "2026-04-24", "source": {"source_type": "polygon_price", "source_id": "polygon/aggs/AAPL/2026-04-23", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "suggested_target": {"value": 230.0, "unit": "USD", "as_of": "2026-04-24", "source": {"source_type": "polygon_price", "source_id": "polygon/aggs/AAPL/2026-04-23", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "regime": "mean_reverting",
+    "signal": "neutral",
+    "signal_strength": "moderate",
+    "qualitative_summary": "Price is consolidating between well-defined support and resistance. Neither trend nor momentum offers an edge here; wait for confirmation.",
+    "confidence": "medium"
+  },
+  "NewsSentimentOutput": {
+    "net_sentiment": 0.12,
+    "articles_analyzed": 47,
+    "top_positive_themes": [
+      {"claim": "Services revenue growth accelerating on new subscription tiers.", "sources": [{"source_type": "finnhub_news", "source_id": "finnhub/news/abc123", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}], "confidence": "medium"}
+    ],
+    "top_negative_themes": [
+      {"claim": "China demand softness cited in multiple analyst notes.", "sources": [{"source_type": "finnhub_news", "source_id": "finnhub/news/def456", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}], "confidence": "medium"}
+    ],
+    "anomaly_flags": [],
+    "earnings_guidance_changes": [],
+    "qualitative_summary": "Mildly positive net sentiment driven by services commentary, offset by China softness narratives.",
+    "confidence": "medium"
+  },
+  "InsiderFlowOutput": {
+    "net_insider_dollars_90d": {"value": -12500000.0, "unit": "USD", "as_of": "2026-04-24", "source": {"source_type": "sec_filing", "source_id": "form4/AAPL/cluster", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "cluster_buying": false,
+    "cluster_selling": true,
+    "top_insider_moves": [
+      {"name": "T. Cook", "role": "CEO", "action": "sell", "shares": 100000.0, "dollar_value": 21000000.0, "date": "2026-03-15"}
+    ],
+    "institutional_net_change_qoq": {"value": 0.012, "unit": "ratio", "as_of": "2026-03-31", "source": {"source_type": "sec_filing", "source_id": "13f/aggregate/AAPL/Q1-2026", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "activist_presence": [],
+    "qualitative_summary": "Programmatic 10b5-1 selling dominates the signal. Institutional ownership edged up modestly quarter over quarter.",
+    "confidence": "medium"
+  },
+  "RiskOutput": {
+    "position_size_rec_pct": 3.5,
+    "hard_stop_level": {"value": 185.0, "unit": "USD", "as_of": "2026-04-24", "source": {"source_type": "calculated", "source_id": "stop_atr2x", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "max_drawdown_historical": {"value": -0.34, "unit": "ratio", "as_of": "2026-04-24", "source": {"source_type": "polygon_price", "source_id": "polygon/aggs/AAPL/since-2020", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}},
+    "correlation_to_portfolio": 0.42,
+    "liquidity_adequate": true,
+    "concentration_warnings": [],
+    "dfast_scenarios": {
+      "pullback": {"name": "pullback", "assumed_move_pct": -0.15, "position_value_start_usd": 10000.0, "position_value_after_usd": 8500.0, "drawdown_usd": -1500.0, "notes": null},
+      "recession": {"name": "recession", "assumed_move_pct": -0.3, "position_value_start_usd": 10000.0, "position_value_after_usd": 7000.0, "drawdown_usd": -3000.0, "notes": "-30% base case"},
+      "severe": {"name": "severe", "assumed_move_pct": -0.5, "position_value_start_usd": 10000.0, "position_value_after_usd": 5000.0, "drawdown_usd": -5000.0, "notes": null},
+      "sector_shock": {"name": "sector_shock", "assumed_move_pct": -0.2, "position_value_start_usd": 10000.0, "position_value_after_usd": 8000.0, "drawdown_usd": -2000.0, "notes": null},
+      "bull_rally": {"name": "bull_rally", "assumed_move_pct": 0.25, "position_value_start_usd": 10000.0, "position_value_after_usd": 12500.0, "drawdown_usd": 2500.0, "notes": null}
+    },
+    "go_no_go": "approve_with_conditions",
+    "conditions": ["Size no larger than 3.5 percent of portfolio", "Trim on a break of 188"],
+    "qualitative_summary": "Liquidity is ample. Recommend entry at small size with a hard stop below near-term support. Recession scenario compresses value meaningfully.",
+    "confidence": "medium"
+  },
+  "BullBearDebateOutput": {
+    "case": "Apple compounds at a high rate of return on capital with a durable ecosystem moat. Services-led mix shift is still in early innings. Capital allocation remains disciplined. The current multiple looks fair-to-cheap relative to the implied growth in a reverse DCF.",
+    "strongest_evidence": [
+      {"claim": "Services revenue has grown at a compound rate of about ten percent per year.", "sources": [{"source_type": "fmp_fundamental", "source_id": "fmp/income/AAPL/services_segment", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}], "confidence": "high"}
+    ],
+    "weakest_evidence": [],
+    "what_would_change_my_mind": "A sustained miss on services growth below five percent for two consecutive quarters, or a regulatory outcome that materially compresses App Store take-rates.",
+    "confidence": "high"
+  },
+  "OrchestratorFinalOutput": {
+    "symbol": "AAPL",
+    "analysis_id": "11111111-2222-3333-4444-555555555555",
+    "recommendation": "hold",
+    "confidence": "medium",
+    "fii_score": 6.8,
+    "thesis": "Apple remains a high-quality compounder with a durable moat. At current prices the margin of safety is thin and the base-case DCF sits modestly below the market. We wait for a better entry or a demonstrated re-acceleration in services growth before upgrading.",
+    "what_i_would_buy": null,
+    "what_could_make_me_wrong": [
+      {"claim": "Services growth re-accelerates on a new subscription bundle.", "sources": [{"source_type": "finnhub_news", "source_id": "finnhub/news/services", "section": null, "retrieved_at": "2026-04-24T12:00:00Z", "url": null}], "confidence": "medium"},
+      {"claim": "A share-repurchase acceleration materially shrinks the float.", "sources": [{"source_type": "sec_filing", "source_id": "0000320193-24-000123", "section": "Item 5", "retrieved_at": "2026-04-24T12:00:00Z", "url": null}], "confidence": "medium"},
+      {"claim": "Regulatory outcomes are more benign than the bear case assumes.", "sources": [{"source_type": "sec_filing", "source_id": "0000320193-24-000123", "section": "Item 1A Risk Factors", "retrieved_at": "2026-04-24T12:00:00Z", "url": null}], "confidence": "low"}
+    ],
+    "time_horizon": "long (years)",
+    "specialist_summaries": {
+      "fundamentals": "High-quality profile; margin expansion modest.",
+      "valuation": "Fair to slightly rich at current prices.",
+      "moat": "Wide, stable; regulatory risk is the watch item."
+    },
+    "stress_outcomes": {
+      "recession": {"name": "recession", "assumed_move_pct": -0.3, "position_value_start_usd": 10000.0, "position_value_after_usd": 7000.0, "drawdown_usd": -3000.0, "notes": "-30% base case"}
+    },
+    "cost_summary": {"total_usd": 0.42, "input_tokens": 185000, "output_tokens": 14000, "model_calls": 18},
+    "disclaimer": "For educational purposes only. Not investment advice."
+  }
+}

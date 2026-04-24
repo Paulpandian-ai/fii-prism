@@ -7,15 +7,18 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./schemas": "./src/schemas.ts"
+    "./schemas": "./src/schemas/index.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx tests/test_parity.mts"
   },
   "dependencies": {
     "zod": "3.24.1"
   },
   "devDependencies": {
+    "@types/node": "22.10.5",
+    "tsx": "4.19.2",
     "typescript": "5.7.3"
   }
 }
