@@ -1,0 +1,58 @@
+name: Deploy dev
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: CDK deploy (dev)
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build web
+        run: pnpm --filter @fii/web build
+        env:
+          NEXT_PUBLIC_API_BASE_URL: ${{ vars.NEXT_PUBLIC_API_BASE_URL }}
+          NEXT_PUBLIC_APP_ENV: dev
+
+      - name: Configure AWS creds
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: CDK deploy
+        run: pnpm --filter @fii/infra deploy:dev
+        env:
+          CDK_DEFAULT_REGION: us-east-1
+
+      - name: Sync web to S3 + invalidate CloudFront
+        run: |
+          aws s3 sync apps/web/out/ "s3://${{ vars.WEB_BUCKET_NAME }}/" --delete
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ vars.WEB_DISTRIBUTION_ID }}" \
+            --paths "/*"

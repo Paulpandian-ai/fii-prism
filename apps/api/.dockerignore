@@ -1,0 +1,13 @@
+.venv/
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+.env
+.env.local
+node_modules/
+.next/
+cdk.out/
+apps/web/
+infra/

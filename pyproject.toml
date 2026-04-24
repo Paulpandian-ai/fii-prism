@@ -1,0 +1,35 @@
+[project]
+name = "fii-prism-workspace"
+version = "0.1.0"
+description = "FII-PRISM — Factor Impact Intelligence v2 (Python workspace root)"
+requires-python = ">=3.11,<3.13"
+# Workspace root only — no installable package. Members declare their own dependencies.
+dependencies = []
+
+[tool.uv.workspace]
+members = [
+    "apps/api",
+    "packages/agents",
+    "packages/shared",
+    "packages/data-clients",
+]
+
+[tool.uv.sources]
+fii-shared = { workspace = true }
+fii-agents = { workspace = true }
+fii-data-clients = { workspace = true }
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["apps", "packages"]
+python_files = ["test_*.py", "*_test.py"]

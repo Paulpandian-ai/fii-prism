@@ -1,0 +1,41 @@
+# Applied to every Docker build context rooted at the repo root (CDK fromAsset).
+# Keep this aggressive — we only want source + workspace manifests + uv.lock.
+
+# Build artifacts
+**/node_modules/
+**/.next/
+**/out/
+**/dist/
+**/build/
+**/cdk.out/
+**/.turbo/
+
+# Python
+**/__pycache__/
+**/*.pyc
+**/.venv/
+**/venv/
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+**/*.egg-info/
+
+# VCS / editor
+.git/
+.github/
+.vscode/
+.idea/
+**/.DS_Store
+
+# Local env
+.env
+.env.local
+.env.*.local
+
+# Unrelated workspaces that the API image doesn't need
+apps/web/
+infra/
+
+# CDK staging (critical — prevents recursive asset staging)
+infra/cdk.out/
+cdk.out/

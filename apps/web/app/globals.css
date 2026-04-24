@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+/* FII-PRISM theme — v1 palette carried forward.
+   Navy #0A2540 (primary/background accents), accent blue #2E6CFF (CTAs, signals).
+   Serif for display headings, sans for body. */
+@theme {
+  --color-fii-navy: #0a2540;
+  --color-fii-navy-50: #e8edf3;
+  --color-fii-navy-100: #c5d1e0;
+  --color-fii-navy-600: #17365c;
+  --color-fii-navy-900: #071a30;
+
+  --color-fii-blue: #2e6cff;
+  --color-fii-blue-50: #e8f0ff;
+  --color-fii-blue-100: #c9d8ff;
+  --color-fii-blue-600: #1f54d9;
+  --color-fii-blue-700: #1a44b3;
+
+  --color-fii-ink: #0b1220;
+  --color-fii-mute: #5b6b82;
+  --color-fii-paper: #f7f9fc;
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-serif: "Source Serif 4", "Source Serif Pro", "Iowan Old Style", Georgia, serif;
+}
+
+html,
+body {
+  background-color: var(--color-fii-paper);
+  color: var(--color-fii-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-serif);
+  letter-spacing: -0.01em;
+}
