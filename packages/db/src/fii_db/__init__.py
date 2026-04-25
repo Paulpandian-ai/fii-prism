@@ -1,6 +1,7 @@
 """FII-PRISM canonical DB layer: SQLAlchemy models + session helpers."""
 
 from fii_db.enums import (
+    ActionTaken,
     AnalysisRecommendation,
     AnalysisStatus,
     AnalysisType,
@@ -15,6 +16,7 @@ from fii_db.events_bus import DEBOUNCE_WINDOW, PG_CHANNEL, emit_event
 from fii_db.models import (
     AgentPrompt,
     Analysis,
+    AnalysisOutcome,
     AnalysisSpecialistOutput,
     Base,
     ChatMessage,
@@ -39,8 +41,10 @@ from fii_db.session import get_engine, get_session_factory
 __all__ = [
     "DEBOUNCE_WINDOW",
     "PG_CHANNEL",
+    "ActionTaken",
     "AgentPrompt",
     "Analysis",
+    "AnalysisOutcome",
     "AnalysisRecommendation",
     "AnalysisSpecialistOutput",
     "AnalysisStatus",

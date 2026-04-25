@@ -72,12 +72,28 @@ class AnalysisSummary(BaseModel):
     confidence: str | None = None
     fii_score: float | None = None
     total_cost_usd: float | None = None
+    action_taken: str = "none"
+    action_size_usd: float | None = None
+    action_price: float | None = None
+    action_at: datetime | None = None
+    action_notes: str | None = None
 
 
 class AnalysisDetail(AnalysisSummary):
     orchestrator_summary: str | None = None
     model_calls_json: dict[str, Any] = Field(default_factory=dict)
+    prompt_versions_json: dict[str, int] = Field(default_factory=dict)
     specialists: dict[str, Any] = Field(default_factory=dict)
+
+
+class DecisionUpsert(BaseModel):
+    action_taken: str = Field(
+        pattern="^(none|bought|added|held|trimmed|sold|paper_bought|paper_sold)$"
+    )
+    action_size_usd: float | None = None
+    action_price: float | None = None
+    action_at: datetime | None = None
+    action_notes: str | None = None
 
 
 # --- Routes -------------------------------------------------------------------------------
@@ -199,6 +215,39 @@ async def list_analyses(
     return [_row_to_summary(r) for r in rows]
 
 
+@router.patch("/{analysis_id}/decision", response_model=AnalysisSummary)
+async def upsert_decision(
+    analysis_id: str,
+    req: DecisionUpsert,
+    runtime: AgentsRuntime = Depends(get_runtime),
+) -> AnalysisSummary:
+    """Record what the user did with this analysis. Resetting to 'none' clears the row."""
+    from sqlalchemy import update as sql_update
+
+    with session_scope(runtime.session_factory) as s:
+        existing = s.execute(
+            select(Analysis).where(Analysis.analysis_id == analysis_id)
+        ).scalar_one_or_none()
+        if existing is None:
+            raise HTTPException(status_code=404, detail="analysis not found")
+        action_at = req.action_at or datetime.now(UTC)
+        s.execute(
+            sql_update(Analysis)
+            .where(Analysis.analysis_id == analysis_id)
+            .values(
+                action_taken=req.action_taken,
+                action_size_usd=req.action_size_usd,
+                action_price=req.action_price,
+                action_at=action_at if req.action_taken != "none" else None,
+                action_notes=req.action_notes,
+            )
+        )
+        refreshed = s.execute(
+            select(Analysis).where(Analysis.analysis_id == analysis_id)
+        ).scalar_one()
+        return _row_to_summary(refreshed)
+
+
 # --- Helpers ------------------------------------------------------------------------------
 
 
@@ -237,6 +286,11 @@ def _row_to_summary(r: Analysis) -> AnalysisSummary:
         confidence=r.confidence,
         fii_score=float(r.fii_score) if r.fii_score is not None else None,
         total_cost_usd=float(r.total_cost_usd) if r.total_cost_usd is not None else None,
+        action_taken=str(r.action_taken),
+        action_size_usd=float(r.action_size_usd) if r.action_size_usd is not None else None,
+        action_price=float(r.action_price) if r.action_price is not None else None,
+        action_at=r.action_at,
+        action_notes=r.action_notes,
     )
 
 
@@ -254,7 +308,13 @@ def _row_to_detail(r: Analysis, specialists: dict[str, Any]) -> AnalysisDetail:
         total_cost_usd=float(r.total_cost_usd) if r.total_cost_usd is not None else None,
         orchestrator_summary=r.orchestrator_summary,
         model_calls_json=r.model_calls_json or {},
+        prompt_versions_json=r.prompt_versions_json or {},
         specialists=specialists,
+        action_taken=str(r.action_taken),
+        action_size_usd=float(r.action_size_usd) if r.action_size_usd is not None else None,
+        action_price=float(r.action_price) if r.action_price is not None else None,
+        action_at=r.action_at,
+        action_notes=r.action_notes,
     )
 
 

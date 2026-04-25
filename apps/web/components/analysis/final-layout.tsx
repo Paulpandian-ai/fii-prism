@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Disclaimer } from "@/components/chrome/disclaimer";
 import { CitedClaim } from "@/components/citations/cited-claim";
 import { ConfidencePill, FiiScoreChip, RecommendationBadge } from "@/components/recommendations";
+import { DecisionForm } from "./decision-form";
 import { SpecialistCard } from "./specialist-card";
 import { StressTable } from "./stress-table";
 import { fmtUsd } from "@/lib/format";
@@ -130,6 +131,8 @@ export function FinalLayout({ detail }: { detail: AnalysisDetail }) {
       </Card>
 
       <StressTable scenarios={stressOutcomes} />
+
+      <DecisionForm detail={detail} />
     </div>
   );
 }

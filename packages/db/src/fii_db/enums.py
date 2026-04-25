@@ -73,3 +73,14 @@ class EventType(StrEnum):
     EIGHT_K_FILED = "8k_filed"
     EARNINGS_RELEASE = "earnings_release"
     MACRO_SURPRISE = "macro_surprise"
+
+
+class ActionTaken(StrEnum):
+    NONE = "none"
+    BOUGHT = "bought"
+    ADDED = "added"
+    HELD = "held"
+    TRIMMED = "trimmed"
+    SOLD = "sold"
+    PAPER_BOUGHT = "paper_bought"
+    PAPER_SOLD = "paper_sold"

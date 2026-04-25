@@ -34,5 +34,9 @@ ignore = ["E501"]
 quote-style = "double"
 
 [tool.pytest.ini_options]
-testpaths = ["apps", "packages"]
+# Ordering matters: packages first, then apps. The TestClient-driven api tests share
+# a process-wide event loop with leftover background tasks; running pure-package tests
+# first keeps that state minimal and avoids the lifespan-rebuild deadlock we hit when
+# api tests come before agents tests on the same loop.
+testpaths = ["packages", "apps/ingest", "apps/api"]
 python_files = ["test_*.py", "*_test.py"]

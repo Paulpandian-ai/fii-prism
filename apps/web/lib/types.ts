@@ -39,6 +39,16 @@ export interface CreateAnalysisResponse {
   stream_url: string;
 }
 
+export type ActionTaken =
+  | "none"
+  | "bought"
+  | "added"
+  | "held"
+  | "trimmed"
+  | "sold"
+  | "paper_bought"
+  | "paper_sold";
+
 export interface AnalysisSummary {
   analysis_id: string;
   symbol: string;
@@ -50,15 +60,75 @@ export interface AnalysisSummary {
   confidence?: "low" | "medium" | "high" | null;
   fii_score?: number | null;
   total_cost_usd?: number | null;
+  action_taken?: ActionTaken;
+  action_size_usd?: number | null;
+  action_price?: number | null;
+  action_at?: string | null;
+  action_notes?: string | null;
 }
 
 export interface AnalysisDetail extends AnalysisSummary {
   orchestrator_summary?: string | null;
   model_calls_json?: Record<string, unknown>;
+  prompt_versions_json?: Record<string, number>;
   // The backend stores specialist outputs as plain JSON dicts (see Section 5
   // serializer fix). We accept any here; UI components re-validate via zod
   // when they need typed access.
   specialists?: Record<string, unknown>;
+}
+
+export interface DecisionUpsertRequest {
+  action_taken: ActionTaken;
+  action_size_usd?: number | null;
+  action_price?: number | null;
+  action_at?: string | null;
+  action_notes?: string | null;
+}
+
+// --- Journal -----------------------------------------------------------------------------
+
+export interface JournalSummary {
+  decision_count: number;
+  paper_count: number;
+  real_count: number;
+  avg_alpha_by_horizon: Record<string, number | null>;
+  hit_rate_by_horizon: Record<string, number | null>;
+  win_loss_by_horizon: Record<string, { wins: number; losses: number; pending: number }>;
+}
+
+export interface DecisionRow {
+  analysis_id: string;
+  symbol: string;
+  recommendation?: Recommendation | null;
+  confidence?: "low" | "medium" | "high" | null;
+  fii_score?: number | null;
+  action_taken: ActionTaken;
+  action_size_usd?: number | null;
+  action_price?: number | null;
+  action_at?: string | null;
+  return_1m?: number | null;
+  return_3m?: number | null;
+  alpha_1m?: number | null;
+  alpha_3m?: number | null;
+  hit_1m?: boolean | null;
+  hit_3m?: boolean | null;
+  dominance?: string | null;
+}
+
+export interface BreakdownBucket {
+  label: string;
+  count: number;
+  avg_alpha_1m: number | null;
+  avg_alpha_3m: number | null;
+  hit_rate_1m: number | null;
+  hit_rate_3m: number | null;
+}
+
+export interface JournalBreakdowns {
+  by_recommendation: BreakdownBucket[];
+  by_confidence: BreakdownBucket[];
+  by_dominance: BreakdownBucket[];
+  by_prompt_version: BreakdownBucket[];
 }
 
 // --- SSE event shape ----------------------------------------------------------------------

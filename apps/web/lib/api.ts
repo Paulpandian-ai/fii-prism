@@ -19,6 +19,10 @@ import type {
   ChatSessionSummary,
   CreateAnalysisRequest,
   CreateAnalysisResponse,
+  DecisionRow,
+  DecisionUpsertRequest,
+  JournalBreakdowns,
+  JournalSummary,
   RefreshEventItem,
   WatchlistEntry,
 } from "./types";
@@ -220,5 +224,65 @@ export function useDeleteChatSession() {
   return useMutation({
     mutationFn: deleteChatSession,
     onSuccess: () => qc.invalidateQueries({ queryKey: ["chat-sessions"] }),
+  });
+}
+
+// --- Decision journal --------------------------------------------------------------------
+
+export function upsertDecision(analysisId: string, body: DecisionUpsertRequest) {
+  return apiFetch<AnalysisSummary>(
+    `/analyses/${encodeURIComponent(analysisId)}/decision`,
+    { method: "PATCH", body: JSON.stringify(body) },
+  );
+}
+
+export function useUpsertDecision(analysisId: string | null | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: DecisionUpsertRequest) =>
+      upsertDecision(analysisId as string, body),
+    onSuccess: () => {
+      if (!analysisId) return;
+      qc.invalidateQueries({ queryKey: ["analyses", analysisId] });
+      qc.invalidateQueries({ queryKey: ["journal-summary"] });
+      qc.invalidateQueries({ queryKey: ["journal-decisions"] });
+      qc.invalidateQueries({ queryKey: ["journal-breakdowns"] });
+    },
+  });
+}
+
+export function getJournalSummary() {
+  return apiFetch<JournalSummary>("/journal");
+}
+
+export function getJournalDecisions(opts: { limit?: number } = {}) {
+  return apiFetch<DecisionRow[]>("/journal/decisions", { query: { limit: opts.limit ?? 200 } });
+}
+
+export function getJournalBreakdowns() {
+  return apiFetch<JournalBreakdowns>("/journal/breakdowns");
+}
+
+export function useJournalSummary() {
+  return useQuery({
+    queryKey: ["journal-summary"],
+    queryFn: getJournalSummary,
+    staleTime: 30_000,
+  });
+}
+
+export function useJournalDecisions(opts: { limit?: number } = {}) {
+  return useQuery({
+    queryKey: ["journal-decisions", opts],
+    queryFn: () => getJournalDecisions(opts),
+    staleTime: 30_000,
+  });
+}
+
+export function useJournalBreakdowns() {
+  return useQuery({
+    queryKey: ["journal-breakdowns"],
+    queryFn: getJournalBreakdowns,
+    staleTime: 30_000,
   });
 }

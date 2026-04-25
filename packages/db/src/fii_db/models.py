@@ -39,6 +39,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from fii_db.enums import (
+    ActionTaken,
     AnalysisRecommendation,
     AnalysisStatus,
     AnalysisType,
@@ -433,13 +434,37 @@ class Analysis(Base, TimestampMixin):
     total_tokens_in: Mapped[int | None] = mapped_column(Integer)
     total_tokens_out: Mapped[int | None] = mapped_column(Integer)
     model_calls_json: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
+    prompt_versions_json: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
 
     step_functions_execution_arn: Mapped[str | None] = mapped_column(Text)
     reasoning_trail_s3_key: Mapped[str | None] = mapped_column(Text)
     user_notes: Mapped[str | None] = mapped_column(Text)
 
+    # --- Decision journal (Section 9) ----------------------------------------------------
+    action_taken: Mapped[ActionTaken] = mapped_column(
+        PgEnum(
+            ActionTaken,
+            name="action_taken",
+            native_enum=True,
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        nullable=False,
+        server_default=ActionTaken.NONE.value,
+        index=True,
+    )
+    action_size_usd: Mapped[Decimal | None] = mapped_column(Numeric(20, 2))
+    action_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    action_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    action_notes: Mapped[str | None] = mapped_column(Text)
+
     specialist_outputs: Mapped[list[AnalysisSpecialistOutput]] = relationship(
         back_populates="analysis", cascade="all, delete-orphan", passive_deletes=True
+    )
+    outcome: Mapped[AnalysisOutcome | None] = relationship(
+        back_populates="analysis",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        uselist=False,
     )
 
     __table_args__ = (
@@ -484,6 +509,56 @@ class AnalysisSpecialistOutput(Base, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("analysis_id", "specialist_name", name="uq_analysis_specialist"),
     )
+
+
+class AnalysisOutcome(Base):
+    """Per-analysis return tracking populated by the nightly outcomes job.
+
+    One row per analysis (PK on analysis_id). Each horizon column is filled in once
+    enough trading days have elapsed; alpha columns require SPY in prices_daily.
+    `dominance` is the heuristic specialist-weighting label ('bull' | 'bear' | 'balanced').
+    """
+
+    __tablename__ = "analysis_outcomes"
+
+    analysis_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("analyses.analysis_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    symbol: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    entry_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    entry_date: Mapped[date | None] = mapped_column(Date)
+
+    return_1d: Mapped[Decimal | None] = mapped_column(Numeric(8, 5))
+    return_1w: Mapped[Decimal | None] = mapped_column(Numeric(8, 5))
+    return_1m: Mapped[Decimal | None] = mapped_column(Numeric(8, 5))
+    return_3m: Mapped[Decimal | None] = mapped_column(Numeric(8, 5))
+    return_6m: Mapped[Decimal | None] = mapped_column(Numeric(8, 5))
+    return_1y: Mapped[Decimal | None] = mapped_column(Numeric(8, 5))
+
+    alpha_1d: Mapped[Decimal | None] = mapped_column(Numeric(8, 5))
+    alpha_1w: Mapped[Decimal | None] = mapped_column(Numeric(8, 5))
+    alpha_1m: Mapped[Decimal | None] = mapped_column(Numeric(8, 5))
+    alpha_3m: Mapped[Decimal | None] = mapped_column(Numeric(8, 5))
+    alpha_6m: Mapped[Decimal | None] = mapped_column(Numeric(8, 5))
+    alpha_1y: Mapped[Decimal | None] = mapped_column(Numeric(8, 5))
+
+    hit_1d: Mapped[bool | None] = mapped_column(Boolean)
+    hit_1w: Mapped[bool | None] = mapped_column(Boolean)
+    hit_1m: Mapped[bool | None] = mapped_column(Boolean)
+    hit_3m: Mapped[bool | None] = mapped_column(Boolean)
+    hit_6m: Mapped[bool | None] = mapped_column(Boolean)
+    hit_1y: Mapped[bool | None] = mapped_column(Boolean)
+
+    dominance: Mapped[str | None] = mapped_column(String(16))
+    spy_available: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    notes: Mapped[str | None] = mapped_column(Text)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    analysis: Mapped[Analysis] = relationship(back_populates="outcome")
 
 
 # --- User domain (single-user MVP; user_id reserved per Section 0) ------------------------

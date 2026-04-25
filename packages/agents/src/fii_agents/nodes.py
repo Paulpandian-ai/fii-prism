@@ -236,6 +236,10 @@ def make_nodes(
             AnalysisType.QUICK_REFRESH.value if is_quick else AnalysisType.DEEP_DIVE.value
         )
 
+        # Capture which versioned prompts the specialists used. The journal pivots on these
+        # so we can compare prompt v1 vs v2 performance.
+        prompt_versions = _collect_prompt_versions(factory)
+
         with session_scope(factory) as s:
             analysis_stmt = pg_insert(Analysis).values(
                 analysis_id=state["analysis_id"],
@@ -256,6 +260,7 @@ def make_nodes(
                 total_tokens_in=int(state.get("tokens_in_total", 0)),
                 total_tokens_out=int(state.get("tokens_out_total", 0)),
                 model_calls_json={"per_specialist": state.get("timings_ms", {})},
+                prompt_versions_json=prompt_versions,
                 step_functions_execution_arn=None,
                 reasoning_trail_s3_key=None,
                 user_notes=None,
@@ -273,6 +278,7 @@ def make_nodes(
                     "total_tokens_in": analysis_stmt.excluded.total_tokens_in,
                     "total_tokens_out": analysis_stmt.excluded.total_tokens_out,
                     "model_calls_json": analysis_stmt.excluded.model_calls_json,
+                    "prompt_versions_json": analysis_stmt.excluded.prompt_versions_json,
                 },
             )
             s.execute(analysis_stmt)
@@ -403,6 +409,37 @@ def _model_for(specialist_name: str, state: AnalysisState | None = None) -> Mode
 
 def _model_id_for(name: str) -> str:
     return MODEL_SONNET if name == "fundamentals" else "stub"
+
+
+def _collect_prompt_versions(factory: sessionmaker) -> dict[str, int]:
+    """Snapshot the active prompt version for each specialist used in this run.
+
+    Reads all active rows in one query so we don't burn ten sessions during persist.
+    Falls back to {} on any error — the journal degrades gracefully when the table is
+    empty.
+    """
+    from fii_db import AgentPrompt
+
+    versions: dict[str, int] = {}
+    try:
+        with session_scope(factory) as s:
+            rows = (
+                s.execute(
+                    select(AgentPrompt.specialist_name, AgentPrompt.version).where(
+                        AgentPrompt.is_active.is_(True)
+                    )
+                )
+                .all()
+            )
+        for name, version in rows:
+            # Keep the highest active version per specialist (defensive against stale flags).
+            existing = versions.get(name)
+            v = int(version)
+            if existing is None or v > existing:
+                versions[name] = v
+    except Exception:
+        return {}
+    return versions
 
 
 def _first_sentence(text: str | None) -> str:

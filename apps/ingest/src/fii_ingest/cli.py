@@ -339,6 +339,29 @@ def simulate_shock_cmd(
     )
 
 
+@app.command("compute-outcomes")
+def compute_outcomes_cmd() -> None:
+    """Recompute return + alpha vs SPY for every journaled analysis. Idempotent.
+    Schedule this nightly once the journal is in regular use."""
+    from fii_db import get_engine, get_session_factory
+
+    from fii_ingest.jobs.outcomes import compute_outcomes
+
+    settings = get_settings()
+    engine = get_engine(settings.database_url or "")
+    factory = get_session_factory(engine)
+    report = compute_outcomes(factory)
+    console.print_json(
+        json.dumps(
+            {
+                "computed": report.computed,
+                "skipped_no_price": report.skipped_no_price,
+                "skipped_pending": report.skipped_pending,
+            }
+        )
+    )
+
+
 # --- Helpers ------------------------------------------------------------------------------
 
 
