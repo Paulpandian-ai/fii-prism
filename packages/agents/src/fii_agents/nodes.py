@@ -29,7 +29,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import sessionmaker
 
 from fii_agents.budget import Budget
-from fii_agents.model import MODEL_SONNET, Model
+from fii_agents.model import MODEL_HAIKU, MODEL_SONNET, Model
 from fii_agents.specialists.base import Specialist, SpecialistContext
 from fii_agents.specialists.debate import BearResearcher, BullResearcher
 from fii_agents.specialists.fundamentals import FundamentalsSpecialist
@@ -44,6 +44,50 @@ from fii_agents.specialists.valuation import ValuationSpecialist
 from fii_agents.state import AnalysisState, SpecialistError
 
 log = structlog.get_logger(__name__)
+
+
+# Event-scoped specialist subsets for quick_refresh. Keys match the state keys we skip
+# (same as the LangGraph node names for preliminaries). Any specialist NOT in the set
+# for a given event_type is skipped (returns no output) during a quick_refresh run.
+# Bull/bear/risk_final/synthesis/persist always run so the analysis still produces an
+# OrchestratorFinalOutput.
+_PRELIMINARY_NAMES: set[str] = {
+    "fundamentals",
+    "valuation",
+    "moat",
+    "macro",
+    "technical",
+    "news_sentiment",
+    "insider_flow",
+    "risk_preliminary",
+}
+
+_EVENT_SCOPES: dict[str, set[str]] = {
+    "price_shock": {"technical", "news_sentiment", "risk_preliminary"},
+    "news_shock": {"news_sentiment", "risk_preliminary"},
+    "8k_filed": {"fundamentals", "news_sentiment", "risk_preliminary"},
+    "earnings_release": {
+        "fundamentals",
+        "valuation",
+        "news_sentiment",
+        "risk_preliminary",
+    },
+    "macro_surprise": {"macro", "risk_preliminary"},
+}
+
+
+def _is_in_quick_refresh_scope(state: AnalysisState, preliminary_name: str) -> bool:
+    """True when `preliminary_name` should run under the current quick_refresh event.
+
+    Deep-dive runs (no quick_refresh_event_type) always return True.
+    """
+    event_type = (state.get("context") or {}).get("quick_refresh_event_type")
+    if not event_type:
+        return True
+    scope = _EVENT_SCOPES.get(str(event_type))
+    if scope is None:
+        return True  # unknown event type → be permissive, not destructive
+    return preliminary_name in scope
 
 
 # --- Node factory ------------------------------------------------------------------------
@@ -118,6 +162,12 @@ def make_nodes(
 
     def _spec_node(name: str, spec: Specialist, *, prior_fields: list[str] | None = None):
         async def _node(state: AnalysisState) -> dict[str, Any]:
+            # Quick-refresh event scoping: skip preliminary specialists that aren't in
+            # the event-type's scope. Bull/bear/risk_final/synthesis/persist always run
+            # so we still produce a final.
+            if name in _PRELIMINARY_NAMES and not _is_in_quick_refresh_scope(state, name):
+                return {"timings_ms": {name: 0}}
+
             if budget.is_exceeded(float(state.get("cost_running_total", 0.0))):
                 err: SpecialistError = {
                     "specialist": name,
@@ -136,7 +186,7 @@ def make_nodes(
                 context=state.get("context") or {},
                 prior={k: state.get(k) for k in (prior_fields or []) if state.get(k) is not None},
             )
-            model = _model_for(name)
+            model = _model_for(name, state)
             started = time.perf_counter()
             try:
                 result = await spec.run(ctx, model)
@@ -181,12 +231,16 @@ def make_nodes(
         started = time.perf_counter()
         # `final` is a JSON dict by the time it reaches persist (see synthesis.py).
         final: dict | None = state.get("final")
+        is_quick = bool((state.get("context") or {}).get("quick_refresh_event_type"))
+        analysis_type_value = (
+            AnalysisType.QUICK_REFRESH.value if is_quick else AnalysisType.DEEP_DIVE.value
+        )
 
         with session_scope(factory) as s:
             analysis_stmt = pg_insert(Analysis).values(
                 analysis_id=state["analysis_id"],
                 symbol=state["symbol"].upper(),
-                analysis_type=AnalysisType.DEEP_DIVE.value,
+                analysis_type=analysis_type_value,
                 status=AnalysisStatus.SUCCEEDED.value,
                 initiated_at=datetime.now(UTC),
                 completed_at=datetime.now(UTC),
@@ -333,14 +387,17 @@ def _state_key_for(name: str) -> str:
     return name  # identity mapping; keep names consistent with AnalysisState keys
 
 
-def _model_for(specialist_name: str) -> Model:
-    # Only Fundamentals uses a real model in Section 4. Others short-circuit via fake mode.
-    if specialist_name == "fundamentals":
-        return Model(model_id=MODEL_SONNET)
-    # Stubs don't call respond(); a fake-mode Model is harmless placeholder.
-    from os import environ
+def _model_for(specialist_name: str, state: AnalysisState | None = None) -> Model:
+    """Pick the right model for this specialist.
 
-    environ.setdefault("FII_USE_FAKE_MODEL", "1") if False else None  # no-op
+    Quick-refresh runs override to Haiku 4.5 (cheap + fast) unless the specialist is
+    on the Opus-only list (none today). Deep-dives use Sonnet 4.6.
+    """
+    tier = None
+    if state is not None:
+        tier = (state.get("context") or {}).get("model_tier")
+    if tier == "haiku":
+        return Model(model_id=MODEL_HAIKU)
     return Model(model_id=MODEL_SONNET)
 
 

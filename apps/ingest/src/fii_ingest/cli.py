@@ -224,6 +224,121 @@ def insiders_cmd(
     console.print(f"[cyan]Ingested {asyncio.run(_run())} insider transactions for {ticker}[/cyan]")
 
 
+@app.command("detect-shocks")
+def detect_shocks_cmd(
+    ticker: str | None = typer.Option(None, "--ticker", "-t"),
+    since_hours: int = typer.Option(6, "--since-hours"),
+) -> None:
+    """Run the price-shock detector on a ticker (if provided) and the news materiality
+    detector on all recent news. Fires events through fii_db.emit_event, so subscribers
+    (API listener → quick_refresh) see them immediately."""
+    from fii_db import emit_event, get_engine, get_session_factory
+    from fii_db.session import session_scope
+
+    from fii_ingest.jobs.detectors import detect_news_shocks, detect_price_shock
+
+    settings = get_settings()
+
+    engine = get_engine(settings.database_url or "")
+    factory = get_session_factory(engine)
+
+    fired: list[dict] = []
+
+    if ticker:
+        with session_scope(factory) as s:
+            cand = detect_price_shock(s, symbol=ticker)
+        if cand is not None:
+            event_id = emit_event(
+                factory,
+                symbol=cand.symbol,
+                event_type=cand.event_type,
+                payload=cand.payload,
+            )
+            fired.append({"kind": "price_shock", "event_id": event_id, **cand.payload})
+
+    with session_scope(factory) as s:
+        news_cands = detect_news_shocks(s, since_hours=since_hours)
+    for cand in news_cands:
+        event_id = emit_event(
+            factory,
+            symbol=cand.symbol,
+            event_type=cand.event_type,
+            payload=cand.payload,
+        )
+        if event_id:
+            fired.append({"kind": "news_shock", "event_id": event_id, **cand.payload})
+
+    console.print_json(json.dumps({"fired": fired}))
+
+
+@app.command("simulate-shock")
+def simulate_shock_cmd(
+    ticker: str = typer.Option(..., "--ticker", "-t"),
+    event_type: str = typer.Option(
+        "price_shock",
+        "--type",
+        help="price_shock | news_shock | 8k_filed | earnings_release | macro_surprise",
+    ),
+    payload: str | None = typer.Option(
+        None, "--payload", help="Optional JSON object merged into the synthetic payload"
+    ),
+) -> None:
+    """Inject a synthetic event onto the channel. Handy for demos / end-to-end tests —
+    the API listener will see NOTIFY and trigger a quick_refresh if the symbol is on
+    the watchlist.
+    """
+    from fii_db import EventType, emit_event, get_engine, get_session_factory
+
+    from fii_ingest.jobs.detectors import simulate_event_candidate
+
+    try:
+        et = EventType(event_type)
+    except ValueError as exc:
+        raise typer.BadParameter(
+            f"unknown event_type; allowed: {[e.value for e in EventType]}"
+        ) from exc
+
+    extra = json.loads(payload) if payload else None
+    if extra is not None and not isinstance(extra, dict):
+        raise typer.BadParameter("--payload must decode to a JSON object")
+
+    cand = simulate_event_candidate(symbol=ticker, event_type=et, payload=extra)
+    settings = get_settings()
+    engine = get_engine(settings.database_url or "")
+    factory = get_session_factory(engine)
+
+    # Ensure the ticker FK is satisfied. Real ingest seeds this; for demo / smoke we
+    # upsert a minimal row.
+    from fii_db import Ticker
+    from fii_db.session import session_scope
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    with session_scope(factory) as s:
+        s.execute(
+            pg_insert(Ticker)
+            .values(symbol=cand.symbol, name=cand.symbol)
+            .on_conflict_do_nothing(index_elements=[Ticker.symbol])
+        )
+
+    event_id = emit_event(
+        factory,
+        symbol=cand.symbol,
+        event_type=cand.event_type,
+        payload=cand.payload,
+    )
+    console.print_json(
+        json.dumps(
+            {
+                "event_id": event_id,
+                "symbol": cand.symbol,
+                "event_type": cand.event_type.value,
+                "payload": cand.payload,
+                "debounced": event_id is None,
+            }
+        )
+    )
+
+
 # --- Helpers ------------------------------------------------------------------------------
 
 

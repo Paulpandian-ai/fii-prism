@@ -8,6 +8,7 @@
 import {
   useMutation,
   useQuery,
+  useQueryClient,
   type UseQueryOptions,
 } from "@tanstack/react-query";
 import { API_BASE_URL } from "./env";
@@ -16,6 +17,8 @@ import type {
   AnalysisSummary,
   CreateAnalysisRequest,
   CreateAnalysisResponse,
+  RefreshEventItem,
+  WatchlistEntry,
 } from "./types";
 
 // --- Low-level fetch ----------------------------------------------------------------------
@@ -99,4 +102,67 @@ export function useCreateAnalysis() {
 // Stream URL builder for the EventSource client.
 export function streamUrl(analysisId: string): string {
   return `${API_BASE_URL.replace(/\/$/, "")}/analyses/${analysisId}/stream`;
+}
+
+export function eventsStreamUrl(): string {
+  return `${API_BASE_URL.replace(/\/$/, "")}/events/stream`;
+}
+
+// --- Watchlist ----------------------------------------------------------------------------
+
+export function listWatchlist() {
+  return apiFetch<WatchlistEntry[]>("/watchlist");
+}
+
+export function upsertWatchlist(body: { symbol: string; notes?: string | null }) {
+  return apiFetch<WatchlistEntry>("/watchlist", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteWatchlist(symbol: string) {
+  return apiFetch<void>(`/watchlist/${encodeURIComponent(symbol.toUpperCase())}`, {
+    method: "DELETE",
+  });
+}
+
+export function useWatchlist() {
+  return useQuery({
+    queryKey: ["watchlist"],
+    queryFn: listWatchlist,
+    staleTime: 10_000,
+  });
+}
+
+export function useUpsertWatchlist() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: upsertWatchlist,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["watchlist"] }),
+  });
+}
+
+export function useRemoveWatchlist() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: deleteWatchlist,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["watchlist"] }),
+  });
+}
+
+// --- Refresh events -----------------------------------------------------------------------
+
+export function listEvents(opts: { symbol?: string; limit?: number } = {}) {
+  return apiFetch<RefreshEventItem[]>("/events", {
+    query: { symbol: opts.symbol, limit: opts.limit ?? 50 },
+  });
+}
+
+export function useEventsList(opts: { symbol?: string; limit?: number } = {}) {
+  return useQuery({
+    queryKey: ["events", opts],
+    queryFn: () => listEvents(opts),
+    staleTime: 15_000,
+  });
 }

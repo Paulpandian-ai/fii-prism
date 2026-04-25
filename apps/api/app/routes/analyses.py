@@ -50,6 +50,10 @@ class CreateAnalysisRequest(BaseModel):
     analysis_type: str = Field(default="deep_dive")
     # Opus 4.7 synthesis is ~5x the cost of Sonnet; off by default. UI flag in Section 6.
     use_premium_synthesis: bool = Field(default=False)
+    # Only used when analysis_type == "quick_refresh": narrows specialist scope + routes
+    # to Haiku 4.5.
+    event_type: str | None = Field(default=None)
+    event_id: str | None = Field(default=None)
 
 
 class CreateAnalysisResponse(BaseModel):
@@ -83,26 +87,35 @@ class AnalysisDetail(AnalysisSummary):
 async def create_analysis(
     req: CreateAnalysisRequest, runtime: AgentsRuntime = Depends(get_runtime)
 ) -> CreateAnalysisResponse:
-    if req.analysis_type != "deep_dive":
+    if req.analysis_type not in ("deep_dive", "quick_refresh"):
         raise HTTPException(
-            status_code=400, detail="Only analysis_type='deep_dive' is supported in Section 4."
+            status_code=400,
+            detail="analysis_type must be 'deep_dive' or 'quick_refresh'.",
         )
     analysis_id = str(uuid.uuid4())
     symbol = req.symbol.upper()
+    analysis_type_value = (
+        AnalysisType.DEEP_DIVE.value
+        if req.analysis_type == "deep_dive"
+        else AnalysisType.QUICK_REFRESH.value
+    )
 
-    # Pre-create the Analysis row so the stream endpoint can find it even if the
-    # background run hasn't persisted anything yet.
-    _create_pending_row(runtime.session_factory, analysis_id, symbol)
+    _create_pending_row(runtime.session_factory, analysis_id, symbol, analysis_type_value)
 
-    # Kick off the run as a background task. The stream endpoint reads events from
-    # a fresh astream in the SAME orchestrator pipeline (LangGraph replays from the
-    # checkpoint if the work already completed between POST and GET).
+    extra_context: dict[str, Any] = {"use_premium_synthesis": req.use_premium_synthesis}
+    if req.analysis_type == "quick_refresh":
+        extra_context["model_tier"] = "haiku"
+        if req.event_type:
+            extra_context["quick_refresh_event_type"] = req.event_type
+        if req.event_id:
+            extra_context["quick_refresh_event_id"] = req.event_id
+
     task = asyncio.create_task(
         _run_and_log_errors(
             runtime=runtime,
             symbol=symbol,
             analysis_id=analysis_id,
-            use_premium=req.use_premium_synthesis,
+            extra_context=extra_context,
         )
     )
     _BACKGROUND_TASKS.add(task)
@@ -189,12 +202,14 @@ async def list_analyses(
 # --- Helpers ------------------------------------------------------------------------------
 
 
-def _create_pending_row(factory: sessionmaker, analysis_id: str, symbol: str) -> None:
+def _create_pending_row(
+    factory: sessionmaker, analysis_id: str, symbol: str, analysis_type_value: str
+) -> None:
     with session_scope(factory) as s:
         stmt = pg_insert(Analysis).values(
             analysis_id=analysis_id,
             symbol=symbol,
-            analysis_type=AnalysisType.DEEP_DIVE.value,
+            analysis_type=analysis_type_value,
             status=AnalysisStatus.PENDING.value,
             initiated_at=datetime.now(UTC),
             model_calls_json={},
@@ -248,7 +263,11 @@ def _sse(payload: dict[str, Any]) -> bytes:
 
 
 async def _run_and_log_errors(
-    *, runtime: AgentsRuntime, symbol: str, analysis_id: str, use_premium: bool = False
+    *,
+    runtime: AgentsRuntime,
+    symbol: str,
+    analysis_id: str,
+    extra_context: dict[str, Any] | None = None,
 ) -> None:
     try:
         await run_analysis(
@@ -260,7 +279,7 @@ async def _run_and_log_errors(
             embedder=runtime.embedder,
             raw_bucket=runtime.raw_bucket,
             budget=runtime.budget,
-            extra_context={"use_premium_synthesis": use_premium},
+            extra_context=extra_context or {},
         )
     except Exception:
         log.exception("background_run_failed", analysis_id=analysis_id, symbol=symbol)

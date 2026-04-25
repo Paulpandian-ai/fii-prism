@@ -65,3 +65,11 @@ class SpecialistName(StrEnum):
     RISK = "risk"
     BULL = "bull"
     BEAR = "bear"
+
+
+class EventType(StrEnum):
+    PRICE_SHOCK = "price_shock"
+    NEWS_SHOCK = "news_shock"
+    EIGHT_K_FILED = "8k_filed"
+    EARNINGS_RELEASE = "earnings_release"
+    MACRO_SURPRISE = "macro_surprise"

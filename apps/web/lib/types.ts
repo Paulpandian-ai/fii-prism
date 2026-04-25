@@ -28,8 +28,10 @@ import type { OrchestratorFinalOutput, Recommendation } from "@fii/shared/schema
 
 export interface CreateAnalysisRequest {
   symbol: string;
-  analysis_type: "deep_dive";
+  analysis_type: "deep_dive" | "quick_refresh";
   use_premium_synthesis?: boolean;
+  event_type?: string;
+  event_id?: string;
 }
 
 export interface CreateAnalysisResponse {
@@ -67,6 +69,47 @@ export interface NodeEvent {
   analysis_id?: string;
   message?: string;
 }
+
+// --- Watchlist + refresh events -----------------------------------------------------------
+
+export type RefreshEventType =
+  | "price_shock"
+  | "news_shock"
+  | "8k_filed"
+  | "earnings_release"
+  | "macro_surprise";
+
+export interface WatchlistEntry {
+  symbol: string;
+  added_at: string;
+  notes?: string | null;
+}
+
+export interface RefreshEventItem {
+  event_id: string;
+  symbol: string;
+  event_type: RefreshEventType;
+  payload: Record<string, unknown>;
+  detected_at: string;
+  processed_at?: string | null;
+  analysis_id?: string | null;
+}
+
+// Broker envelope coming off /events/stream — "event" for new refresh events,
+// "analysis_updated" when a quick_refresh finishes.
+export type BrokerEnvelope =
+  | ({
+      kind: "event";
+      watchlisted: boolean;
+    } & RefreshEventItem)
+  | {
+      kind: "analysis_updated";
+      analysis_id: string;
+      symbol: string;
+      event_type: RefreshEventType;
+      event_id: string;
+    }
+  | { kind: "_open" };
 
 // --- Live-state UI types ------------------------------------------------------------------
 

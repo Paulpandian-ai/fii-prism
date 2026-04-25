@@ -3,16 +3,20 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/cn";
+import { NotificationBell } from "@/components/chrome/notification-bell";
+import { useEventsStream } from "@/lib/events-sse";
 
 const LINKS: { href: string; label: string }[] = [
   { href: "/", label: "Home" },
   { href: "/history/", label: "History" },
   { href: "/watchlist/", label: "Watchlist" },
   { href: "/portfolio/", label: "Portfolio" },
+  { href: "/feed/", label: "Feed" },
 ];
 
 export function Nav() {
   const pathname = usePathname();
+  useEventsStream();
   return (
     <header className="bg-fii-navy text-white">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
@@ -36,6 +40,7 @@ export function Nav() {
               </Link>
             );
           })}
+          <NotificationBell />
         </nav>
       </div>
     </header>

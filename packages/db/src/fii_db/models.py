@@ -43,6 +43,7 @@ from fii_db.enums import (
     AnalysisStatus,
     AnalysisType,
     Confidence,
+    EventType,
     FormType,
     MarketCapBucket,
     SpecialistName,
@@ -517,6 +518,54 @@ class Position(Base, TimestampMixin):
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     notes: Mapped[str | None] = mapped_column(Text)
+
+
+# --- Refresh events (Section 7) -----------------------------------------------------------
+
+
+class RefreshEvent(Base):
+    """Events that may trigger a quick_refresh: price shocks, news shocks, 8-Ks, earnings,
+    macro surprises. The Postgres LISTEN/NOTIFY channel 'fii_events' broadcasts event_ids;
+    the API listener fans out to in-process subscribers and (if watchlisted) kicks off a
+    quick_refresh analysis.
+    """
+
+    __tablename__ = "refresh_events"
+
+    event_id: Mapped[str] = _uuid_pk()
+    symbol: Mapped[str] = mapped_column(
+        String(10), ForeignKey("tickers.symbol", ondelete="CASCADE"), nullable=False, index=True
+    )
+    event_type: Mapped[EventType] = mapped_column(
+        PgEnum(
+            EventType,
+            name="event_type",
+            native_enum=True,
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        nullable=False,
+    )
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
+    detected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    analysis_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("analyses.analysis_id", ondelete="SET NULL")
+    )
+    dedupe_key: Mapped[str] = mapped_column(String(128), nullable=False, server_default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_refresh_events_dedupe",
+            "symbol",
+            "event_type",
+            "detected_at",
+        ),
+    )
 
 
 # --- Prompt versioning --------------------------------------------------------------------

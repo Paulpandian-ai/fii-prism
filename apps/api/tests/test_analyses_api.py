@@ -53,6 +53,6 @@ def test_get_analysis_and_list(client):
     assert any(row["analysis_id"] == analysis_id for row in listing.json())
 
 
-def test_rejects_non_deep_dive(client):
-    r = client.post("/analyses", json={"symbol": "AAPL", "analysis_type": "quick_refresh"})
+def test_rejects_unknown_analysis_type(client):
+    r = client.post("/analyses", json={"symbol": "AAPL", "analysis_type": "stress_test"})
     assert r.status_code == 400

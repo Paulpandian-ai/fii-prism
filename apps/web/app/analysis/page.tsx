@@ -15,6 +15,7 @@ import { Disclaimer } from "@/components/chrome/disclaimer";
 import { useAnalysis } from "@/lib/api";
 import { useAnalysisStream } from "@/lib/sse";
 import { useLiveStore } from "@/lib/store";
+import { useEventsStore } from "@/lib/events-store";
 import { NODE_ORDER } from "@/lib/types";
 
 export default function AnalysisPage() {
@@ -32,6 +33,12 @@ function AnalysisPageInner() {
   useAnalysisStream(id);
   const reset = useLiveStore((s) => s.reset);
   useEffect(() => () => reset(), [reset]);
+  const lastUpdate = useEventsStore((s) => s.lastAnalysisUpdated);
+  const isRelatedUpdate =
+    lastUpdate &&
+    detail.data?.symbol === lastUpdate.symbol &&
+    lastUpdate.analysis_id !== id &&
+    Date.now() - lastUpdate.at < 5 * 60_000;
 
   if (!id) {
     return (
@@ -65,6 +72,18 @@ function AnalysisPageInner() {
 
   return (
     <PageShell symbol={data.symbol}>
+      {isRelatedUpdate && lastUpdate && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <span className="font-medium">{lastUpdate.symbol} refreshed</span> after{" "}
+          {lastUpdate.event_type.replace("_", " ")}.{" "}
+          <Link
+            href={`/analysis/?id=${lastUpdate.analysis_id}`}
+            className="font-semibold underline"
+          >
+            Open the updated analysis →
+          </Link>
+        </div>
+      )}
       {isFinal ? <FinalLayout detail={data} /> : <LiveLayout detail={data} />}
     </PageShell>
   );
