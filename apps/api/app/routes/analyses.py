@@ -48,6 +48,8 @@ _BACKGROUND_TASKS: set[asyncio.Task] = set()
 class CreateAnalysisRequest(BaseModel):
     symbol: str = Field(min_length=1, max_length=10)
     analysis_type: str = Field(default="deep_dive")
+    # Opus 4.7 synthesis is ~5x the cost of Sonnet; off by default. UI flag in Section 6.
+    use_premium_synthesis: bool = Field(default=False)
 
 
 class CreateAnalysisResponse(BaseModel):
@@ -96,7 +98,12 @@ async def create_analysis(
     # a fresh astream in the SAME orchestrator pipeline (LangGraph replays from the
     # checkpoint if the work already completed between POST and GET).
     task = asyncio.create_task(
-        _run_and_log_errors(runtime=runtime, symbol=symbol, analysis_id=analysis_id)
+        _run_and_log_errors(
+            runtime=runtime,
+            symbol=symbol,
+            analysis_id=analysis_id,
+            use_premium=req.use_premium_synthesis,
+        )
     )
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)
@@ -240,7 +247,9 @@ def _sse(payload: dict[str, Any]) -> bytes:
     return f"data: {json.dumps(payload, default=str)}\n\n".encode()
 
 
-async def _run_and_log_errors(*, runtime: AgentsRuntime, symbol: str, analysis_id: str) -> None:
+async def _run_and_log_errors(
+    *, runtime: AgentsRuntime, symbol: str, analysis_id: str, use_premium: bool = False
+) -> None:
     try:
         await run_analysis(
             symbol=symbol,
@@ -251,6 +260,7 @@ async def _run_and_log_errors(*, runtime: AgentsRuntime, symbol: str, analysis_i
             embedder=runtime.embedder,
             raw_bucket=runtime.raw_bucket,
             budget=runtime.budget,
+            extra_context={"use_premium_synthesis": use_premium},
         )
     except Exception:
         log.exception("background_run_failed", analysis_id=analysis_id, symbol=symbol)

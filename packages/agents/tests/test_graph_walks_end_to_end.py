@@ -34,8 +34,12 @@ async def test_full_graph_walks_end_to_end(database_url, session_factory):
     )
 
     # Acceptance 3: final output is a valid OrchestratorFinalOutput with real fundamentals.
-    final = state["final"]
-    assert final is not None
+    # State stores dicts (LangGraph serializer requirement); re-validate to confirm shape.
+    from fii_shared import OrchestratorFinalOutput
+
+    final_dict = state["final"]
+    assert final_dict is not None
+    final = OrchestratorFinalOutput.model_validate(final_dict)
     assert final.symbol == "AAPL"
     assert final.disclaimer == "For educational purposes only. Not investment advice."
     assert len(final.what_could_make_me_wrong) >= 3

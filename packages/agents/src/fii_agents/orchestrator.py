@@ -138,9 +138,13 @@ async def run_analysis(
     embedder: Embedder | None = None,
     raw_bucket: str | None = None,
     budget: Budget | None = None,
+    extra_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run one analysis to completion (blocking). Used by tests and the API's
     background task path. For live UX, prefer stream_analysis() below.
+
+    `extra_context` is merged into state['context'] by _load_context (e.g.
+    {"use_premium_synthesis": True}).
     """
     graph = build_graph(factory, embedder=embedder, raw_bucket=raw_bucket, budget=budget)
     async with checkpointer_from_url(database_url) as saver:
@@ -149,6 +153,7 @@ async def run_analysis(
             "symbol": symbol,
             "analysis_id": analysis_id,
             "user_id": user_id,
+            "context": dict(extra_context or {}),
         }
         final_state = await app.ainvoke(initial, {"configurable": {"thread_id": analysis_id}})
     return final_state
@@ -164,6 +169,7 @@ async def stream_analysis(
     embedder: Embedder | None = None,
     raw_bucket: str | None = None,
     budget: Budget | None = None,
+    extra_context: dict[str, Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream LangGraph events for one analysis. Each event is a dict ready to be
     serialized and pushed over SSE.
@@ -175,11 +181,11 @@ async def stream_analysis(
             "symbol": symbol,
             "analysis_id": analysis_id,
             "user_id": user_id,
+            "context": dict(extra_context or {}),
         }
         config = {"configurable": {"thread_id": analysis_id}}
         # `updates` stream_mode yields one dict per node completion — ideal for SSE.
         async for event in app.astream(initial, config, stream_mode="updates"):
-            # event is {node_name: partial_state}; emit one message per node.
             for node_name, _ in event.items():
                 yield {"node": node_name, "status": "complete"}
 

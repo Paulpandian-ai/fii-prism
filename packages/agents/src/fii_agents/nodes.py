@@ -24,7 +24,6 @@ from fii_db import (
     SpecialistName,
 )
 from fii_db.session import session_scope
-from fii_shared import CitedClaim, CostSummary, OrchestratorFinalOutput, SourceRef, SourceType
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import sessionmaker
@@ -32,18 +31,16 @@ from sqlalchemy.orm import sessionmaker
 from fii_agents.budget import Budget
 from fii_agents.model import MODEL_SONNET, Model
 from fii_agents.specialists.base import Specialist, SpecialistContext
+from fii_agents.specialists.debate import BearResearcher, BullResearcher
 from fii_agents.specialists.fundamentals import FundamentalsSpecialist
-from fii_agents.specialists.stubs import (
-    BearStub,
-    BullStub,
-    InsiderFlowStub,
-    MacroStub,
-    MoatStub,
-    NewsSentimentStub,
-    RiskStub,
-    TechnicalStub,
-    ValuationStub,
-)
+from fii_agents.specialists.insider import InsiderFlowSpecialist
+from fii_agents.specialists.macro import MacroSpecialist
+from fii_agents.specialists.moat import MoatSpecialist
+from fii_agents.specialists.news import NewsSentimentSpecialist
+from fii_agents.specialists.risk import RiskSpecialist
+from fii_agents.specialists.synthesis import run_synthesis
+from fii_agents.specialists.technical import TechnicalSpecialist
+from fii_agents.specialists.valuation import ValuationSpecialist
 from fii_agents.state import AnalysisState, SpecialistError
 
 log = structlog.get_logger(__name__)
@@ -63,24 +60,30 @@ def make_nodes(
     embedder = embedder or make_embedder()
     budget = budget or Budget.from_env()
 
-    # Specialists we run in the fan-out.
+    # Specialists we run in the fan-out — all real implementations now (with fake-mode
+    # fallbacks inside each, used when ANTHROPIC_API_KEY is unset).
     preliminary_specialists: dict[str, Specialist] = {
         "fundamentals": FundamentalsSpecialist(),
-        "valuation": ValuationStub(),
-        "moat": MoatStub(),
-        "macro": MacroStub(),
-        "technical": TechnicalStub(),
-        "news_sentiment": NewsSentimentStub(),
-        "insider_flow": InsiderFlowStub(),
-        "risk_preliminary": RiskStub(),
+        "valuation": ValuationSpecialist(),
+        "moat": MoatSpecialist(),
+        "macro": MacroSpecialist(),
+        "technical": TechnicalSpecialist(),
+        "news_sentiment": NewsSentimentSpecialist(),
+        "insider_flow": InsiderFlowSpecialist(),
+        "risk_preliminary": RiskSpecialist(),
     }
-    researchers: dict[str, Specialist] = {"bull": BullStub(), "bear": BearStub()}
-    risk_final: Specialist = RiskStub()
+    researchers: dict[str, Specialist] = {
+        "bull": BullResearcher(),
+        "bear": BearResearcher(),
+    }
+    risk_final: Specialist = RiskSpecialist()
 
     async def _load_context(state: AnalysisState) -> dict[str, Any]:
         log.info("node_load_context_start", symbol=state["symbol"])
         started_at = time.perf_counter()
-        context: dict[str, Any] = {"as_of": datetime.now(UTC).isoformat()}
+        # Carry forward anything the API supplied as extra_context (e.g. use_premium_synthesis).
+        context: dict[str, Any] = dict(state.get("context") or {})
+        context["as_of"] = datetime.now(UTC).isoformat()
         try:
             from fii_db import Ticker
 
@@ -153,7 +156,11 @@ def make_nodes(
                 "timings_ms": {name: result.duration_ms},
             }
             if result.output is not None:
-                delta[_state_key_for(name)] = result.output
+                # LangGraph's checkpoint serializer round-trips through ormsgpack which
+                # doesn't natively encode `date` / `Decimal`. mode="json" yields JSON
+                # primitives. Downstream consumers (synthesis, debate, persist) read
+                # plain dicts.
+                delta[_state_key_for(name)] = result.output.model_dump(mode="json")
             if result.error:
                 delta["errors"] = [
                     {"specialist": name, "kind": "tool_error", "message": result.error}
@@ -163,102 +170,17 @@ def make_nodes(
         return _node
 
     async def _synthesis(state: AnalysisState) -> dict[str, Any]:
-        """Deterministic synthesis for Section 4. Real Opus/Sonnet synthesis lands in
-        Section 5. We build an OrchestratorFinalOutput from the specialist outputs.
-        """
-        started = time.perf_counter()
-        fii_score = _score(state)
-        recommendation = _recommendation_from_score(fii_score)
-        risk = state.get("risk") or state.get("risk_preliminary")
-        stress_outcomes = dict(risk.dfast_scenarios) if risk else {}
-
-        src = SourceRef(
-            source_type=SourceType.CALCULATED,
-            source_id="synthesis/section4",
-            section=None,
-            retrieved_at=datetime.now(UTC),
-            url=None,
-        )
-        wrong_claims = [
-            CitedClaim(
-                claim="The fundamentals signal could decay if services growth slows.",
-                sources=[src],
-                confidence="medium",
-            ),
-            CitedClaim(
-                claim="Regulatory outcomes could compress platform economics.",
-                sources=[src],
-                confidence="medium",
-            ),
-            CitedClaim(
-                claim="A multiple de-rating could wipe out near-term upside.",
-                sources=[src],
-                confidence="low",
-            ),
-        ]
-
-        summaries: dict[str, str] = {}
-        for name in (
-            "fundamentals",
-            "valuation",
-            "moat",
-            "macro",
-            "technical",
-            "news_sentiment",
-            "insider_flow",
-        ):
-            obj = state.get(name)
-            if obj is not None and hasattr(obj, "qualitative_summary"):
-                summaries[name] = _first_sentence(obj.qualitative_summary)
-
-        what_i_would_buy: str | None = None
-        if recommendation in ("buy", "strong_buy"):
-            tech = state.get("technical")
-            risk_obj = state.get("risk") or state.get("risk_preliminary")
-            entry = tech.suggested_entry.value if tech else 0.0
-            stop = tech.suggested_stop.value if tech else 0.0
-            size = risk_obj.position_size_rec_pct if risk_obj else 0.0
-            what_i_would_buy = (
-                f"Entry near [${entry:.2f}:technical.suggested_entry], "
-                f"hard stop below [${stop:.2f}:technical.suggested_stop], "
-                f"size at [{size:.1f}%:risk.position_size_rec_pct] of portfolio. "
-                "(Section-4 stub — refine in Section 5.)"
-            )
-
-        final = OrchestratorFinalOutput(
-            symbol=state["symbol"].upper(),
-            analysis_id=state["analysis_id"],
-            recommendation=recommendation,
-            confidence="medium",
-            fii_score=float(fii_score),
-            thesis=(
-                f"{state['symbol'].upper()} synthesis based on specialist outputs. "
-                "This is a Section-4 walking-skeleton synthesis; real Opus/Sonnet "
-                "reasoning lands in Section 5. Fundamentals scoring is real when an "
-                "Anthropic key is present; other specialists are stubs."
-            ),
-            what_i_would_buy=what_i_would_buy,
-            what_could_make_me_wrong=wrong_claims,
-            time_horizon="long (years)",
-            specialist_summaries=summaries,
-            stress_outcomes=stress_outcomes,
-            cost_summary=CostSummary(
-                total_usd=float(state.get("cost_running_total", 0.0)),
-                input_tokens=int(state.get("tokens_in_total", 0)),
-                output_tokens=int(state.get("tokens_out_total", 0)),
-                model_calls=int(state.get("model_calls_total", 0)),
-            ),
-        )
-
-        return {
-            "final": final,
-            "timings_ms": {"synthesis": int((time.perf_counter() - started) * 1000)},
-        }
+        """LLM-backed synthesis (Sonnet 4.6 by default; Opus 4.7 when use_premium=True
+        in state['context']). Falls back to deterministic synthesis when fake-mode is
+        active or when the LLM call fails twice in a row."""
+        use_premium = bool((state.get("context") or {}).get("use_premium_synthesis", False))
+        return await run_synthesis(state, use_premium=use_premium)
 
     async def _persist(state: AnalysisState) -> dict[str, Any]:
         """Write the Analysis row + one AnalysisSpecialistOutput per specialist."""
         started = time.perf_counter()
-        final: OrchestratorFinalOutput | None = state.get("final")
+        # `final` is a JSON dict by the time it reaches persist (see synthesis.py).
+        final: dict | None = state.get("final")
 
         with session_scope(factory) as s:
             analysis_stmt = pg_insert(Analysis).values(
@@ -268,10 +190,14 @@ def make_nodes(
                 status=AnalysisStatus.SUCCEEDED.value,
                 initiated_at=datetime.now(UTC),
                 completed_at=datetime.now(UTC),
-                orchestrator_summary=(final.thesis if final else None),
-                recommendation=(final.recommendation if final else None),
-                confidence=("medium" if final else None),
-                fii_score=(float(final.fii_score) if final else None),
+                orchestrator_summary=(final.get("thesis") if final else None),
+                recommendation=(final.get("recommendation") if final else None),
+                confidence=(final.get("confidence") if final else None),
+                fii_score=(
+                    float(final["fii_score"])
+                    if final and final.get("fii_score") is not None
+                    else None
+                ),
                 total_cost_usd=float(state.get("cost_running_total", 0.0)),
                 total_tokens_in=int(state.get("tokens_in_total", 0)),
                 total_tokens_out=int(state.get("tokens_out_total", 0)),
@@ -315,11 +241,14 @@ def make_nodes(
                     obj = state.get("risk_preliminary")
                 if obj is None:
                     continue
+                # State stores plain dicts now (see _spec_node) — no model_dump needed.
                 row_stmt = pg_insert(AnalysisSpecialistOutput).values(
                     analysis_id=state["analysis_id"],
                     specialist_name=enum.value,
-                    output_json=obj.model_dump(mode="json"),
-                    reasoning_text=getattr(obj, "qualitative_summary", None),
+                    output_json=obj,
+                    reasoning_text=obj.get("qualitative_summary")
+                    if isinstance(obj, dict)
+                    else None,
                     citations_json={},
                     model_used=_model_id_for(name),
                     tokens_in=0,
