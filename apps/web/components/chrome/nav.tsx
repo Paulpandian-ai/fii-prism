@@ -8,6 +8,7 @@ import { useEventsStream } from "@/lib/events-sse";
 
 const LINKS: { href: string; label: string }[] = [
   { href: "/", label: "Home" },
+  { href: "/advisor/", label: "Advisor" },
   { href: "/history/", label: "History" },
   { href: "/watchlist/", label: "Watchlist" },
   { href: "/portfolio/", label: "Portfolio" },

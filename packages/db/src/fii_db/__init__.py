@@ -17,6 +17,8 @@ from fii_db.models import (
     Analysis,
     AnalysisSpecialistOutput,
     Base,
+    ChatMessage,
+    ChatSession,
     Filing,
     FilingChunk,
     FundamentalsQuarterly,
@@ -29,6 +31,7 @@ from fii_db.models import (
     PriceIntraday,
     RefreshEvent,
     Ticker,
+    UserSettings,
     Watchlist,
 )
 from fii_db.session import get_engine, get_session_factory
@@ -43,6 +46,8 @@ __all__ = [
     "AnalysisStatus",
     "AnalysisType",
     "Base",
+    "ChatMessage",
+    "ChatSession",
     "Confidence",
     "EventType",
     "Filing",
@@ -61,6 +66,7 @@ __all__ = [
     "SpecialistName",
     "StatementType",
     "Ticker",
+    "UserSettings",
     "Watchlist",
     "emit_event",
     "get_engine",

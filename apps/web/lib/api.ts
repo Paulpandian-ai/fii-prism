@@ -15,6 +15,8 @@ import { API_BASE_URL } from "./env";
 import type {
   AnalysisDetail,
   AnalysisSummary,
+  ChatMessageItem,
+  ChatSessionSummary,
   CreateAnalysisRequest,
   CreateAnalysisResponse,
   RefreshEventItem,
@@ -164,5 +166,59 @@ export function useEventsList(opts: { symbol?: string; limit?: number } = {}) {
     queryKey: ["events", opts],
     queryFn: () => listEvents(opts),
     staleTime: 15_000,
+  });
+}
+
+// --- Chat / advisor -----------------------------------------------------------------------
+
+export function listChatSessions() {
+  return apiFetch<ChatSessionSummary[]>("/chat");
+}
+
+export function createChatSession() {
+  return apiFetch<{ session_id: string }>("/chat", { method: "POST" });
+}
+
+export function listChatMessages(sessionId: string) {
+  return apiFetch<ChatMessageItem[]>(`/chat/${encodeURIComponent(sessionId)}`);
+}
+
+export function deleteChatSession(sessionId: string) {
+  return apiFetch<void>(`/chat/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+}
+
+export function chatStreamUrl(sessionId: string): string {
+  return `${API_BASE_URL.replace(/\/$/, "")}/chat/${encodeURIComponent(sessionId)}/message`;
+}
+
+export function useChatSessions() {
+  return useQuery({
+    queryKey: ["chat-sessions"],
+    queryFn: listChatSessions,
+    staleTime: 5_000,
+  });
+}
+
+export function useChatMessages(sessionId: string | null) {
+  return useQuery({
+    queryKey: ["chat-messages", sessionId],
+    queryFn: () => listChatMessages(sessionId as string),
+    enabled: Boolean(sessionId),
+  });
+}
+
+export function useCreateChatSession() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: createChatSession,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["chat-sessions"] }),
+  });
+}
+
+export function useDeleteChatSession() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: deleteChatSession,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["chat-sessions"] }),
   });
 }

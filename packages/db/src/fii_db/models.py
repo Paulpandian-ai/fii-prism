@@ -568,6 +568,81 @@ class RefreshEvent(Base):
     )
 
 
+# --- Advisor chat (Section 8) -------------------------------------------------------------
+
+
+class ChatSession(Base, TimestampMixin):
+    """One conversation thread with the Wealth Advisor."""
+
+    __tablename__ = "chat_sessions"
+
+    session_id: Mapped[str] = _uuid_pk()
+    user_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False, server_default="New chat")
+    total_cost_usd: Mapped[Decimal] = mapped_column(
+        Numeric(10, 6), nullable=False, server_default="0"
+    )
+    total_tokens_in: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    total_tokens_out: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    message_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
+    messages: Mapped[list[ChatMessage]] = relationship(
+        back_populates="session",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ChatMessage.created_at",
+    )
+
+
+class ChatMessage(Base):
+    """Individual chat turn. role ∈ {'user', 'assistant', 'tool'}.
+
+    The full Anthropic content blocks (text + tool_use + tool_result) live in `tool_calls`
+    as JSONB so we can faithfully replay the conversation back into the model.
+    """
+
+    __tablename__ = "chat_messages"
+
+    message_id: Mapped[str] = _uuid_pk()
+    session_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("chat_sessions.session_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str | None] = mapped_column(Text)
+    tool_calls: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    referenced_analysis_ids: Mapped[list[str]] = mapped_column(
+        ARRAY(UUID(as_uuid=False)), nullable=False, server_default="{}"
+    )
+    tokens_in: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    tokens_out: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(10, 6), nullable=False, server_default="0")
+    model_used: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    session: Mapped[ChatSession] = relationship(back_populates="messages")
+
+
+class UserSettings(Base, TimestampMixin):
+    """Per-user knobs the advisor needs (cash balance for portfolio-impact sims, target
+    concentration cap). Single-row today; one row per user once Cognito ships.
+    """
+
+    __tablename__ = "user_settings"
+
+    user_id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
+    cash_balance_usd: Mapped[Decimal] = mapped_column(
+        Numeric(20, 2), nullable=False, server_default="0"
+    )
+    target_concentration_pct: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), nullable=False, server_default="10.00"
+    )
+
+
 # --- Prompt versioning --------------------------------------------------------------------
 
 

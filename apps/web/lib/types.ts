@@ -111,6 +111,57 @@ export type BrokerEnvelope =
     }
   | { kind: "_open" };
 
+// --- Chat / advisor -----------------------------------------------------------------------
+
+export interface ChatSessionSummary {
+  session_id: string;
+  title: string;
+  message_count: number;
+  total_cost_usd: number;
+  updated_at: string;
+  created_at: string;
+}
+
+export interface ChatToolCall {
+  id?: string;
+  name: string;
+  input: Record<string, unknown>;
+  result?: Record<string, unknown> | null;
+}
+
+export interface ChatMessageItem {
+  message_id: string;
+  role: "user" | "assistant" | "tool";
+  content: string | null;
+  tool_calls: ChatToolCall[];
+  referenced_analysis_ids: string[];
+  cost_usd: number;
+  tokens_in: number;
+  tokens_out: number;
+  model_used?: string | null;
+  created_at: string;
+}
+
+// SSE frame kinds emitted by POST /chat/{id}/message.
+export type ChatStreamFrame =
+  | { kind: "user_message_persisted"; message_id: string }
+  | { kind: "tool_use_started"; tool_name: string; tool_input: Record<string, unknown> }
+  | {
+      kind: "tool_result";
+      tool_name: string;
+      tool_result: Record<string, unknown>;
+    }
+  | {
+      kind: "message_complete";
+      final_text: string;
+      cost_usd: number;
+      tokens_in: number;
+      tokens_out: number;
+      referenced_analysis_ids: string[];
+    }
+  | { kind: "assistant_message_persisted"; message_id: string }
+  | { kind: "error"; text: string };
+
 // --- Live-state UI types ------------------------------------------------------------------
 
 export type NodePhase = "pending" | "running" | "complete" | "error";

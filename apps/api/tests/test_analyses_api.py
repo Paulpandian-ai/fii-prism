@@ -3,7 +3,7 @@ and the list endpoint shows it."""
 
 from __future__ import annotations
 
-import asyncio
+import time
 import uuid
 
 import pytest
@@ -31,13 +31,15 @@ def test_get_analysis_and_list(client):
     created = client.post("/analyses", json={"symbol": "AAPL", "analysis_type": "deep_dive"}).json()
     analysis_id = created["analysis_id"]
 
-    # Give the background task a moment to complete. In fake mode the whole graph
-    # runs in < 1 second but we're in a sync TestClient so give up to 10s.
+    # Give the background task a moment to complete. The GET call itself drives the
+    # TestClient's internal event loop, so we just need to poll with a small sync
+    # sleep — never call asyncio.run / run_until_complete inside a TestClient context
+    # since it conflicts with the loop driving lifespan + listener tasks.
     for _ in range(50):
         r = client.get(f"/analyses/{analysis_id}")
         if r.status_code == 200 and r.json().get("status") == "succeeded":
             break
-        asyncio.get_event_loop().run_until_complete(asyncio.sleep(0.2))
+        time.sleep(0.2)
     else:
         pytest.fail("analysis did not succeed within 10s")
 

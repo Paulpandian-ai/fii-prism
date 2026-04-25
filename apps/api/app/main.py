@@ -14,6 +14,7 @@ from app.events import EventBroker
 from app.listener import shutdown_listener, start_listener_task
 from app.logging import configure_logging
 from app.routes.analyses import router as analyses_router
+from app.routes.chat import router as chat_router
 from app.routes.events import router as events_router
 from app.routes.health import router as health_router
 from app.routes.watchlist import router as watchlist_router
@@ -67,6 +68,7 @@ app.include_router(health_router)
 app.include_router(analyses_router)
 app.include_router(watchlist_router)
 app.include_router(events_router)
+app.include_router(chat_router)
 
 
 @app.get("/")
