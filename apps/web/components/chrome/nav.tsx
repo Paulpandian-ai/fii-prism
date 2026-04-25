@@ -14,6 +14,7 @@ const LINKS: { href: string; label: string }[] = [
   { href: "/watchlist/", label: "Watchlist" },
   { href: "/portfolio/", label: "Portfolio" },
   { href: "/feed/", label: "Feed" },
+  { href: "/admin/", label: "Admin" },
 ];
 
 export function Nav() {

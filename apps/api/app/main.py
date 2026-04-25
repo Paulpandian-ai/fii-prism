@@ -13,6 +13,9 @@ from app.event_runtime import set_broker
 from app.events import EventBroker
 from app.listener import shutdown_listener, start_listener_task
 from app.logging import configure_logging
+from app.middleware.correlation import CorrelationIdMiddleware
+from app.middleware.rate_limit import RateLimitMiddleware
+from app.routes.admin import router as admin_router
 from app.routes.analyses import router as analyses_router
 from app.routes.chat import router as chat_router
 from app.routes.events import router as events_router
@@ -34,11 +37,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     broker = EventBroker()
     set_broker(broker)
 
+    # Skip the LISTEN/NOTIFY listener under FII_DISABLE_LISTENER (tests). The listener
+    # holds a long-lived async psycopg connection that doesn't always cancel cleanly
+    # when TestClient teardown rebuilds the lifespan, and tests don't exercise it.
     listener_task = None
-    try:
-        listener_task = start_listener_task(runtime, broker)
-    except Exception:
-        log.exception("listener_start_failed")
+    if not _disable_listener():
+        try:
+            listener_task = start_listener_task(runtime, broker)
+        except Exception:
+            log.exception("listener_start_failed")
 
     try:
         yield
@@ -50,6 +57,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # leave dead tasks attached to a closed event loop, which deadlocks the next
         # TestClient.
         await _cancel_background_tasks()
+
+
+def _disable_listener() -> bool:
+    import os
+
+    return os.environ.get("FII_DISABLE_LISTENER", "").lower() in ("1", "true", "yes")
 
 
 async def _cancel_background_tasks() -> None:
@@ -77,13 +90,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Order matters with add_middleware — the LAST one added runs first on the way in.
+# Correlation ID outermost so every other middleware (and downstream logs) sees it.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Correlation-ID"],
 )
+app.add_middleware(RateLimitMiddleware, per_minute=100)
+app.add_middleware(CorrelationIdMiddleware)
 
 app.include_router(health_router)
 app.include_router(analyses_router)
@@ -91,6 +109,7 @@ app.include_router(watchlist_router)
 app.include_router(events_router)
 app.include_router(chat_router)
 app.include_router(journal_router)
+app.include_router(admin_router)
 
 
 @app.get("/")

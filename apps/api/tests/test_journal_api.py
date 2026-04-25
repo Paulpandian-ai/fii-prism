@@ -102,8 +102,23 @@ def _cleanup(factory, analysis_id: str) -> None:
 
 
 def test_patch_decision_persists_action(client):
-    # Create an analysis via the normal POST + wait for it to succeed.
-    created = client.post("/analyses", json={"symbol": "AAPL", "analysis_type": "deep_dive"}).json()
+    # Unique per-test symbol so the per-minute idempotency_key dedupe doesn't reuse
+    # a prior test's analysis_id (which may already have an action recorded).
+    from app.agents_runtime import get_runtime
+    from fii_db import Ticker
+    from fii_db.session import session_scope
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    symbol = f"ZZD{uuid.uuid4().hex[:6].upper()}"
+    factory = get_runtime().session_factory
+    with session_scope(factory) as s:
+        s.execute(
+            pg_insert(Ticker)
+            .values(symbol=symbol, name=symbol)
+            .on_conflict_do_nothing(index_elements=[Ticker.symbol])
+        )
+
+    created = client.post("/analyses", json={"symbol": symbol, "analysis_type": "deep_dive"}).json()
     aid = created["analysis_id"]
     import time
 

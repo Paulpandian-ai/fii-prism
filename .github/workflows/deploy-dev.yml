@@ -56,3 +56,6 @@ jobs:
           aws cloudfront create-invalidation \
             --distribution-id "${{ vars.WEB_DISTRIBUTION_ID }}" \
             --paths "/*"
+
+      - name: Post-deploy smoke test
+        run: bash scripts/smoke.sh "${{ vars.NEXT_PUBLIC_API_BASE_URL }}"

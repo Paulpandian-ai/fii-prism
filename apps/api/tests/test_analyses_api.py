@@ -18,6 +18,23 @@ def client():
         yield c
 
 
+def _seed_ticker(symbol: str) -> None:
+    """Pre-create the ticker so the analyses.symbol FK is satisfied at insert time
+    (load_context only upserts after the BG task starts, which races with the FK check)."""
+    from app.agents_runtime import get_runtime
+    from fii_db import Ticker
+    from fii_db.session import session_scope
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    factory = get_runtime().session_factory
+    with session_scope(factory) as s:
+        s.execute(
+            pg_insert(Ticker)
+            .values(symbol=symbol, name=symbol)
+            .on_conflict_do_nothing(index_elements=[Ticker.symbol])
+        )
+
+
 def test_post_analyses_returns_id(client):
     r = client.post("/analyses", json={"symbol": "AAPL", "analysis_type": "deep_dive"})
     assert r.status_code == 202
@@ -28,7 +45,11 @@ def test_post_analyses_returns_id(client):
 
 
 def test_get_analysis_and_list(client):
-    created = client.post("/analyses", json={"symbol": "AAPL", "analysis_type": "deep_dive"}).json()
+    # Unique per-test symbol so the per-minute idempotency_key dedupe doesn't fold this
+    # run into a prior test's analysis_id.
+    symbol = f"ZZL{uuid.uuid4().hex[:6].upper()}"
+    _seed_ticker(symbol)
+    created = client.post("/analyses", json={"symbol": symbol, "analysis_type": "deep_dive"}).json()
     analysis_id = created["analysis_id"]
 
     # Give the background task a moment to complete. The GET call itself drives the
@@ -45,12 +66,12 @@ def test_get_analysis_and_list(client):
 
     detail = r.json()
     assert detail["status"] == "succeeded"
-    assert detail["symbol"] == "AAPL"
+    assert detail["symbol"] == symbol
     assert detail["recommendation"] is not None
     assert detail["fii_score"] is not None
     assert len(detail["specialists"]) == 10
 
-    listing = client.get("/analyses", params={"symbol": "AAPL", "limit": 5})
+    listing = client.get("/analyses", params={"symbol": symbol, "limit": 5})
     assert listing.status_code == 200
     assert any(row["analysis_id"] == analysis_id for row in listing.json())
 

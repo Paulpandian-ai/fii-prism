@@ -36,6 +36,23 @@ jobs:
   python:
     name: Python (ruff + pytest)
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: fii
+          POSTGRES_PASSWORD: fii_local_dev
+          POSTGRES_DB: fii_prism
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fii"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://fii:fii_local_dev@localhost:5432/fii_prism?client_encoding=utf8
+      FII_USE_FAKE_MODEL: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -50,6 +67,10 @@ jobs:
       - name: Sync workspace
         run: uv sync --all-packages --all-extras
 
+      - name: Apply migrations
+        working-directory: apps/api
+        run: uv run alembic upgrade head
+
       - name: Ruff
         run: uv run ruff check .
 
@@ -58,3 +79,14 @@ jobs:
 
       - name: Pytest
         run: uv run pytest -q
+
+  secrets-scan:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

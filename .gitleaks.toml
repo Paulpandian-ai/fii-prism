@@ -1,0 +1,19 @@
+# Default gitleaks rules + a small allowlist for placeholders we use in env templates
+# and CDK outputs.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "FII-PRISM allowed false-positives"
+paths = [
+  ".env.example",
+  "docs/.*",
+  "infra/cdk.out/.*",
+]
+regexes = [
+  # Local dev DB password — committed intentionally in .env.example, docs.
+  '''fii_local_dev''',
+  # Single-user UUID NIL sentinel.
+  '''00000000-0000-0000-0000-000000000000''',
+]

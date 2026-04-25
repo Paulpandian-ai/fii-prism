@@ -131,6 +131,50 @@ export interface JournalBreakdowns {
   by_prompt_version: BreakdownBucket[];
 }
 
+// --- Admin / observability ---------------------------------------------------------------
+
+export interface DailyVolume {
+  date: string;
+  analyses: number;
+  avg_cost_usd: number | null;
+  total_cost_usd: number;
+}
+
+export interface SpecialistHealth {
+  specialist: string;
+  runs: number;
+  avg_duration_ms: number | null;
+  error_rate: number;
+}
+
+export interface TokenUsageRow {
+  model: string | null;
+  runs: number;
+  tokens_in: number;
+  tokens_out: number;
+}
+
+export interface AdminStats {
+  daily_volume: DailyVolume[];
+  specialist_health: SpecialistHealth[];
+  token_usage: TokenUsageRow[];
+}
+
+export interface CircuitSnapshot {
+  name: string;
+  state: "closed" | "open" | "half_open";
+  consecutive_failures: number;
+  cooldown_remaining_s: number;
+}
+
+export interface CostCapStatus {
+  cap_usd: number;
+  spent_today_usd: number;
+  remaining_usd: number;
+  exceeded: boolean;
+  midnight_resets_at: string;
+}
+
 // --- SSE event shape ----------------------------------------------------------------------
 
 export interface NodeEvent {

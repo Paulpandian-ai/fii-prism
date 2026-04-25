@@ -439,6 +439,8 @@ class Analysis(Base, TimestampMixin):
     step_functions_execution_arn: Mapped[str | None] = mapped_column(Text)
     reasoning_trail_s3_key: Mapped[str | None] = mapped_column(Text)
     user_notes: Mapped[str | None] = mapped_column(Text)
+    idempotency_key: Mapped[str | None] = mapped_column(String(64))
+    correlation_id: Mapped[str | None] = mapped_column(String(36))
 
     # --- Decision journal (Section 9) ----------------------------------------------------
     action_taken: Mapped[ActionTaken] = mapped_column(

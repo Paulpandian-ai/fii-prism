@@ -9,10 +9,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import structlog
@@ -32,6 +33,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import sessionmaker
 
 from app.agents_runtime import AgentsRuntime, get_runtime
+from app.cost_gate import DailyCapExceeded, assert_within_daily_cap
+from app.middleware.correlation import get_correlation_id
 
 log = structlog.get_logger(__name__)
 
@@ -108,7 +111,13 @@ async def create_analysis(
             status_code=400,
             detail="analysis_type must be 'deep_dive' or 'quick_refresh'.",
         )
-    analysis_id = str(uuid.uuid4())
+
+    # Daily spend cap pre-flight. Per-analysis cap is still enforced inside the agent loop.
+    try:
+        assert_within_daily_cap(runtime.session_factory)
+    except DailyCapExceeded as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from None
+
     symbol = req.symbol.upper()
     analysis_type_value = (
         AnalysisType.DEEP_DIVE.value
@@ -116,7 +125,26 @@ async def create_analysis(
         else AnalysisType.QUICK_REFRESH.value
     )
 
-    _create_pending_row(runtime.session_factory, analysis_id, symbol, analysis_type_value)
+    # Idempotency: same symbol + analysis_type + minute → reuse the existing analysis_id.
+    # Guards against double-clicks and accidental retries from clients.
+    idempotency_key = _idempotency_key(symbol, analysis_type_value)
+    existing_id = _existing_for_key(runtime.session_factory, idempotency_key)
+    if existing_id is not None:
+        return CreateAnalysisResponse(
+            analysis_id=existing_id,
+            stream_url=f"/analyses/{existing_id}/stream",
+        )
+
+    analysis_id = str(uuid.uuid4())
+    correlation_id = get_correlation_id()
+    _create_pending_row(
+        runtime.session_factory,
+        analysis_id,
+        symbol,
+        analysis_type_value,
+        idempotency_key=idempotency_key,
+        correlation_id=correlation_id,
+    )
 
     extra_context: dict[str, Any] = {"use_premium_synthesis": req.use_premium_synthesis}
     if req.analysis_type == "quick_refresh":
@@ -125,6 +153,8 @@ async def create_analysis(
             extra_context["quick_refresh_event_type"] = req.event_type
         if req.event_id:
             extra_context["quick_refresh_event_id"] = req.event_id
+    if correlation_id:
+        extra_context["correlation_id"] = correlation_id
 
     task = asyncio.create_task(
         _run_and_log_errors(
@@ -252,7 +282,13 @@ async def upsert_decision(
 
 
 def _create_pending_row(
-    factory: sessionmaker, analysis_id: str, symbol: str, analysis_type_value: str
+    factory: sessionmaker,
+    analysis_id: str,
+    symbol: str,
+    analysis_type_value: str,
+    *,
+    idempotency_key: str | None = None,
+    correlation_id: str | None = None,
 ) -> None:
     with session_scope(factory) as s:
         stmt = pg_insert(Analysis).values(
@@ -262,9 +298,35 @@ def _create_pending_row(
             status=AnalysisStatus.PENDING.value,
             initiated_at=datetime.now(UTC),
             model_calls_json={},
+            idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
         )
         stmt = stmt.on_conflict_do_nothing(index_elements=[Analysis.analysis_id])
         s.execute(stmt)
+
+
+def _idempotency_key(symbol: str, analysis_type_value: str) -> str:
+    """Stable key for the same (symbol, analysis_type) within the same UTC minute.
+
+    sha256 keeps the column at fixed length (64 chars) and is safe to store as-is.
+    """
+    minute = datetime.now(UTC).replace(second=0, microsecond=0).isoformat()
+    raw = f"{symbol}|{analysis_type_value}|{minute}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _existing_for_key(factory: sessionmaker, key: str) -> str | None:
+    """Reuse an analysis created by the same key in the past hour. Beyond the hour we
+    let the user kick a fresh run rather than serving truly stale work."""
+    cutoff = datetime.now(UTC) - timedelta(hours=1)
+    with session_scope(factory) as s:
+        row = s.execute(
+            select(Analysis.analysis_id).where(
+                Analysis.idempotency_key == key,
+                Analysis.initiated_at >= cutoff,
+            )
+        ).scalar_one_or_none()
+    return str(row) if row else None
 
 
 def _load_analysis(factory: sessionmaker, analysis_id: str) -> Analysis | None:

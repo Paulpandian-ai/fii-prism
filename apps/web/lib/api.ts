@@ -13,10 +13,13 @@ import {
 } from "@tanstack/react-query";
 import { API_BASE_URL } from "./env";
 import type {
+  AdminStats,
   AnalysisDetail,
   AnalysisSummary,
   ChatMessageItem,
   ChatSessionSummary,
+  CircuitSnapshot,
+  CostCapStatus,
   CreateAnalysisRequest,
   CreateAnalysisResponse,
   DecisionRow,
@@ -285,4 +288,34 @@ export function useJournalBreakdowns() {
     queryFn: getJournalBreakdowns,
     staleTime: 30_000,
   });
+}
+
+// --- Admin --------------------------------------------------------------------------------
+
+export function getAdminStats() {
+  return apiFetch<AdminStats>("/admin/stats");
+}
+
+export function getCircuitBreakers() {
+  return apiFetch<CircuitSnapshot[]>("/admin/circuit-breakers");
+}
+
+export function getCostCap() {
+  return apiFetch<CostCapStatus>("/admin/cost-cap");
+}
+
+export function useAdminStats() {
+  return useQuery({ queryKey: ["admin-stats"], queryFn: getAdminStats, refetchInterval: 30_000 });
+}
+
+export function useCircuitBreakers() {
+  return useQuery({
+    queryKey: ["admin-breakers"],
+    queryFn: getCircuitBreakers,
+    refetchInterval: 10_000,
+  });
+}
+
+export function useCostCap() {
+  return useQuery({ queryKey: ["admin-cost-cap"], queryFn: getCostCap, refetchInterval: 10_000 });
 }

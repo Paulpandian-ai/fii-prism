@@ -423,14 +423,11 @@ def _collect_prompt_versions(factory: sessionmaker) -> dict[str, int]:
     versions: dict[str, int] = {}
     try:
         with session_scope(factory) as s:
-            rows = (
-                s.execute(
-                    select(AgentPrompt.specialist_name, AgentPrompt.version).where(
-                        AgentPrompt.is_active.is_(True)
-                    )
+            rows = s.execute(
+                select(AgentPrompt.specialist_name, AgentPrompt.version).where(
+                    AgentPrompt.is_active.is_(True)
                 )
-                .all()
-            )
+            ).all()
         for name, version in rows:
             # Keep the highest active version per specialist (defensive against stale flags).
             existing = versions.get(name)

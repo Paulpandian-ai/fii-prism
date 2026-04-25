@@ -122,14 +122,30 @@ are pulled from AWS Secrets Manager by the Fargate task role.
 | `CDK_DEFAULT_ACCOUNT`         | cdk (deploy)   | Deploy               | From `aws sts get-caller-identity`             |
 | `CDK_DEFAULT_REGION`          | cdk (deploy)   | Deploy               | Defaults to `us-east-1`                        |
 
-## What this section delivers (and deliberately does not)
+## Production hardening (Section 10)
 
-**Delivers:** empty-but-wired monorepo; Next.js home-page shell with v1 color palette; FastAPI
-with `/health` and `/ready`; Postgres + pgvector locally via compose; Alembic scaffold with
-initial extension migration; six CDK stacks that synth cleanly.
+| Concern               | Where it lives                                                                    |
+| --------------------- | --------------------------------------------------------------------------------- |
+| Idempotency           | `analyses.idempotency_key` (sha256 of symbol+type+minute), reused for 1h           |
+| Daily spend cap       | `apps/api/app/cost_gate.py` (POST /analyses returns 429 when over `FII_DAILY_SPEND_CAP_USD`) |
+| Per-analysis cap      | `fii_agents.Budget` — short-circuits remaining specialists once `cost_running_total ≥ cap` |
+| Circuit breakers      | `fii_shared.CircuitBreaker` per data-client provider (5 fails → 60s open)         |
+| Retry with jitter     | `fii_shared.retry_with_jitter` (AWS full-jitter), tenacity in data-client base    |
+| Correlation IDs       | `app.middleware.correlation` — `X-Correlation-ID` echoed + threaded to structlog  |
+| Rate limit            | `app.middleware.rate_limit` — per-IP token bucket (100/min default)               |
+| Prompt injection      | `_INJECTION_PATTERNS` in news specialist + 20-payload regression test             |
+| Admin observability   | `GET /admin/{stats,circuit-breakers,cost-cap}` + `/admin` web dashboard           |
+| Secret hygiene        | `.gitleaks.toml` + `.pre-commit-config.yaml` block any commit with high-entropy strings |
 
-**Does not deliver yet:** agents, LLM calls, data ingestion, auth UI, charts, any real tables
-beyond the Alembic bootstrap, or a Step Functions orchestrator. Those land in Sections 2+.
+See `docs/RUNBOOK.md` for incident playbooks and `docs/AGENTS.md` for per-specialist details.
 
-Every AI output in this app will end with: _"For educational purposes only. Not investment
+## Documentation index
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — system diagram, rationale, trade-offs.
+- [`docs/AGENTS.md`](docs/AGENTS.md) — one section per specialist (tools, prompt, cost, failure modes).
+- [`docs/RUNBOOK.md`](docs/RUNBOOK.md) — what to do when Polygon is down, Aurora is slow, costs spike, etc.
+- [`docs/DISCLAIMERS.md`](docs/DISCLAIMERS.md) — full educational-purpose language and limits.
+- [`docs/COSTS.md`](docs/COSTS.md) — model cost table + per-analysis budget breakdown.
+
+Every AI output in this app ends with: _"For educational purposes only. Not investment
 advice."_

@@ -12,10 +12,11 @@ import asyncio
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Self
+from typing import Any, ClassVar, Self
 
 import httpx
 import structlog
+from fii_shared import CircuitBreaker, CircuitOpenError
 from tenacity import (
     AsyncRetrying,
     retry_if_exception_type,
@@ -136,6 +137,12 @@ class BaseHttpClient:
     default_rate_per_sec: float = 5.0
     default_burst: int = 10
     max_attempts: int = 4
+    breaker_failure_threshold: int = 5
+    breaker_cooldown_s: float = 60.0
+
+    # One CircuitBreaker per provider class. Per-process state so all clients of the
+    # same provider share the same gate. ClassVar so ruff doesn't flag the shared dict.
+    _BREAKERS: ClassVar[dict[str, CircuitBreaker]] = {}
 
     def __init__(
         self,
@@ -158,6 +165,17 @@ class BaseHttpClient:
         self._timeout = timeout or self.default_timeout
         self.cost = CostTally(provider=self.provider)
         self._log = log.bind(provider=self.provider)
+        if self.provider not in BaseHttpClient._BREAKERS:
+            BaseHttpClient._BREAKERS[self.provider] = CircuitBreaker(
+                name=self.provider,
+                failure_threshold=self.breaker_failure_threshold,
+                cooldown_s=self.breaker_cooldown_s,
+            )
+        self._breaker = BaseHttpClient._BREAKERS[self.provider]
+
+    @classmethod
+    def all_breaker_snapshots(cls) -> list[dict[str, Any]]:
+        return [b.snapshot() for b in cls._BREAKERS.values()]
 
     async def __aenter__(self) -> Self:
         self._client = httpx.AsyncClient(
@@ -205,38 +223,51 @@ class BaseHttpClient:
             headers=_redact_headers(merged_headers),
         )
 
-        async for attempt in AsyncRetrying(
-            stop=stop_after_attempt(self.max_attempts),
-            wait=wait_exponential_jitter(initial=0.5, max=8),
-            retry=retry_if_exception_type(_RETRYABLE),
-            reraise=True,
-        ):
-            with attempt:
-                await self._bucket.acquire()
-                start = time.perf_counter()
-                resp = await self._client.request(
-                    method, path, params=merged_params, json=json, headers=merged_headers
-                )
-                duration_ms = int((time.perf_counter() - start) * 1000)
+        async def _do_request() -> httpx.Response:
+            async for attempt in AsyncRetrying(
+                stop=stop_after_attempt(self.max_attempts),
+                wait=wait_exponential_jitter(initial=0.5, max=8),
+                retry=retry_if_exception_type(_RETRYABLE),
+                reraise=True,
+            ):
+                with attempt:
+                    await self._bucket.acquire()
+                    start = time.perf_counter()
+                    assert self._client is not None
+                    resp = await self._client.request(
+                        method, path, params=merged_params, json=json, headers=merged_headers
+                    )
+                    duration_ms = int((time.perf_counter() - start) * 1000)
 
-                self.cost.add_request()
-                req_log.info(
-                    "http_request",
-                    status=resp.status_code,
-                    duration_ms=duration_ms,
-                    bytes=len(resp.content or b""),
-                    attempt=attempt.retry_state.attempt_number,
-                )
+                    self.cost.add_request()
+                    req_log.info(
+                        "http_request",
+                        status=resp.status_code,
+                        duration_ms=duration_ms,
+                        bytes=len(resp.content or b""),
+                        attempt=attempt.retry_state.attempt_number,
+                    )
 
-                if resp.status_code == 429:
-                    raise RateLimitedError(f"{self.provider} rate-limited: {resp.text[:200]}")
-                if resp.status_code >= 500:
-                    raise UpstreamError(f"{self.provider} {resp.status_code}: {resp.text[:200]}")
-                if resp.status_code >= 400:
-                    raise ProviderError(f"{self.provider} {resp.status_code}: {resp.text[:200]}")
-                return resp
+                    if resp.status_code == 429:
+                        raise RateLimitedError(f"{self.provider} rate-limited: {resp.text[:200]}")
+                    if resp.status_code >= 500:
+                        raise UpstreamError(
+                            f"{self.provider} {resp.status_code}: {resp.text[:200]}"
+                        )
+                    return resp
+            raise RuntimeError("unreachable")  # pragma: no cover
 
-        raise RuntimeError("unreachable")  # pragma: no cover
+        # Only 5xx + transport + rate-limit errors trip the breaker. 4xx is a permanent
+        # client-side bug; we surface it after the breaker sees a "success".
+        try:
+            resp = await self._breaker.call(_do_request)
+        except CircuitOpenError:
+            req_log.warning("circuit_open", provider=self.provider)
+            raise UpstreamError(f"{self.provider} circuit open — provider unavailable") from None
+
+        if resp.status_code >= 400:
+            raise ProviderError(f"{self.provider} {resp.status_code}: {resp.text[:200]}")
+        return resp
 
     async def get_json(self, path: str, **kwargs: Any) -> Any:
         resp = await self.request("GET", path, **kwargs)

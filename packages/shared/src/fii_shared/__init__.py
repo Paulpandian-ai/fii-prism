@@ -18,6 +18,12 @@ from fii_shared.primitives import (
     SourceType,
     Trend3,
 )
+from fii_shared.resilience import (
+    BreakerState,
+    CircuitBreaker,
+    CircuitOpenError,
+    retry_with_jitter,
+)
 from fii_shared.schemas import (
     AgentRunStatus,
     AnalysisRun,
@@ -59,8 +65,11 @@ __all__ = [
     # existing (Section 1)
     "AgentRunStatus",
     "AnalysisRun",
+    "BreakerState",
     # specialist outputs
     "BullBearDebateOutput",
+    "CircuitBreaker",
+    "CircuitOpenError",
     # primitives
     "CitedClaim",
     "CitedNumber",
@@ -101,6 +110,7 @@ __all__ = [
     "Trend3",
     "TrendShort",
     "ValuationOutput",
+    "retry_with_jitter",
     "try_parse",
     "validate_numeric_claims",
 ]
