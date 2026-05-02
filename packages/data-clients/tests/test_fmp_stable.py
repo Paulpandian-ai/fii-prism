@@ -319,3 +319,158 @@ async def test_endpoints_return_empty_list_when_upstream_returns_null() -> None:
         assert await c.get_dcf("ZZUNKNOWN") is None
     finally:
         await c._client.aclose()
+
+
+# --- HTTP 402 (Starter-plan-gated) handling ----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ratios_402_quarter_falls_back_to_annual(monkeypatch) -> None:
+    """FMP Starter gates `period=quarter` on /stable/ratios. The first call returns
+    402; the client must auto-retry with `period=annual`, log the fallback warning,
+    and surface the annual data to the caller."""
+    captured = _patch_warnings(monkeypatch)
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        assert request.url.path == "/stable/ratios"
+        period = params.get("period", "")
+        calls.append(period)
+        if period == "quarter":
+            return httpx.Response(402, text='{"error": "Premium Endpoint"}')
+        # Annual is allowed on Starter.
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "date": "2025-12-31",
+                    "grossProfitMargin": 0.42,
+                    "operatingProfitMargin": 0.28,
+                    "netProfitMargin": 0.24,
+                }
+            ],
+        )
+
+    c = await _client_with_mock(handler)
+    try:
+        rows = await c.get_ratios("AAPL", period="quarter")
+    finally:
+        await c._client.aclose()
+
+    assert calls == ["quarter", "annual"], f"expected quarter→annual fallback; saw {calls}"
+    assert len(rows) == 1
+    assert rows[0]["grossProfitMargin"] == 0.42
+    assert any(
+        event == "fmp_ratios_quarter_blocked_falling_back_to_annual"
+        and kwargs.get("symbol") == "AAPL"
+        for event, kwargs in captured
+    ), f"expected fmp_ratios_quarter_blocked_falling_back_to_annual; got {captured}"
+
+
+@pytest.mark.asyncio
+async def test_ratios_402_annual_returns_empty_and_logs_skipping(monkeypatch) -> None:
+    """If even annual ratios return 402, the client gives up gracefully — log
+    fmp_ratios_blocked_skipping and return [] so the seed keeps moving."""
+    captured = _patch_warnings(monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(402, text='{"error": "Premium Endpoint"}')
+
+    c = await _client_with_mock(handler)
+    try:
+        rows = await c.get_ratios("AAPL", period="annual")
+    finally:
+        await c._client.aclose()
+
+    assert rows == []
+    assert any(
+        event == "fmp_ratios_blocked_skipping"
+        and kwargs.get("symbol") == "AAPL"
+        and kwargs.get("period") == "annual"
+        for event, kwargs in captured
+    ), f"expected fmp_ratios_blocked_skipping; got {captured}"
+
+
+@pytest.mark.asyncio
+async def test_dcf_402_returns_none_and_logs_not_in_plan(monkeypatch) -> None:
+    """DCF endpoint is gated on Starter. 402 → None + fmp_dcf_not_in_plan."""
+    captured = _patch_warnings(monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(402, text='{"error": "Premium Endpoint"}')
+
+    c = await _client_with_mock(handler)
+    try:
+        result = await c.get_dcf("AAPL")
+    finally:
+        await c._client.aclose()
+
+    assert result is None
+    assert any(
+        event == "fmp_dcf_not_in_plan" and kwargs.get("symbol") == "AAPL"
+        for event, kwargs in captured
+    ), f"expected fmp_dcf_not_in_plan; got {captured}"
+
+
+@pytest.mark.asyncio
+async def test_analyst_estimates_402_returns_empty_and_logs_not_in_plan(monkeypatch) -> None:
+    """analyst-estimates endpoint is gated on Starter. 402 → [] +
+    fmp_analyst_estimates_not_in_plan with symbol + period in the kwargs."""
+    captured = _patch_warnings(monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(402, text='{"error": "Premium Endpoint"}')
+
+    c = await _client_with_mock(handler)
+    try:
+        rows = await c.get_analyst_estimates("AAPL", period="annual")
+    finally:
+        await c._client.aclose()
+
+    assert rows == []
+    assert any(
+        event == "fmp_analyst_estimates_not_in_plan"
+        and kwargs.get("symbol") == "AAPL"
+        and kwargs.get("period") == "annual"
+        for event, kwargs in captured
+    ), f"expected fmp_analyst_estimates_not_in_plan; got {captured}"
+
+
+@pytest.mark.asyncio
+async def test_statement_endpoints_402_returns_empty(monkeypatch) -> None:
+    """Income / balance / cash-flow on Starter aren't gated today, but if FMP
+    re-tiers them later the client must still degrade gracefully."""
+    captured = _patch_warnings(monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(402, text='{"error": "Premium Endpoint"}')
+
+    c = await _client_with_mock(handler)
+    try:
+        assert await c.get_income_statement("AAPL") == []
+        assert await c.get_balance_sheet("AAPL") == []
+        assert await c.get_cash_flow("AAPL") == []
+    finally:
+        await c._client.aclose()
+
+    events = {event for event, _ in captured}
+    assert "fmp_income_statement_not_in_plan" in events
+    assert "fmp_balance_sheet_not_in_plan" in events
+    assert "fmp_cash_flow_not_in_plan" in events
+
+
+@pytest.mark.asyncio
+async def test_profile_402_returns_none(monkeypatch) -> None:
+    captured = _patch_warnings(monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(402, text='{"error": "Premium Endpoint"}')
+
+    c = await _client_with_mock(handler)
+    try:
+        assert await c.get_profile("AAPL") is None
+    finally:
+        await c._client.aclose()
+
+    assert any(event == "fmp_profile_not_in_plan" for event, _ in captured)

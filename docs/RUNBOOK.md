@@ -52,6 +52,28 @@ CloudWatch billing alarm fires.
   ensure the prompt text is byte-identical run-to-run (no embedded timestamps).
 - Consider Bedrock Batch Inference for any nightly bulk scoring (~50% cost vs on-demand).
 
+## FMP returns HTTP 402 (Starter-plan-gated endpoint or parameter)
+
+**Detection**: structlog warning lines like:
+- `fmp_ratios_quarter_blocked_falling_back_to_annual symbol=AAPL` — auto-handled, no
+  action needed; the client retried with `period=annual` which Starter allows.
+- `fmp_dcf_not_in_plan symbol=AAPL` — DCF endpoint is premium-gated. The Valuation
+  specialist falls back to its in-process `run_dcf` tool with FRED-sourced WACC + a
+  manual revenue/margin trajectory.
+- `fmp_analyst_estimates_not_in_plan symbol=AAPL period=annual` — analyst-estimate
+  endpoint is premium-gated. No fallback today; the specialist proceeds without
+  consensus context.
+
+**Immediate mitigation**: nothing — all 402 paths degrade gracefully (return `[]` or
+`None`) and the seed/analysis continues with the rest of the data sources.
+
+**Permanent fix**: either accept the gating (the in-process DCF + qualitative
+analyst context are usually good enough for fundamental investing) or upgrade to FMP
+Premium / Ultimate. No code change is needed when you upgrade — the methods just
+start receiving 200s where they previously got 402s.
+
+See `README.md` "Data-provider plan limits" for the full per-endpoint table.
+
 ## An agent returns invalid JSON consistently
 
 **Detection**: `analysis_specialist_outputs.output_json` is empty for that specialist; admin

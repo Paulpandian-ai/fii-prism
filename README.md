@@ -139,6 +139,29 @@ are pulled from AWS Secrets Manager by the Fargate task role.
 
 See `docs/RUNBOOK.md` for incident playbooks and `docs/AGENTS.md` for per-specialist details.
 
+## Data-provider plan limits
+
+### FMP Starter ($22/mo with student discount)
+
+FMP returns **HTTP 402 Payment Required** for endpoints or parameters above your
+plan tier. The client degrades gracefully — every endpoint logs a structured warning
+and returns the empty value of its return type rather than raising. The seed and
+agent loops continue with whatever data is available.
+
+| Endpoint | Starter availability | Soft-miss behavior |
+| --- | --- | --- |
+| `/stable/profile` | ✅ allowed | (n/a) |
+| `/stable/income-statement?period=annual\|quarter` | ✅ allowed | logs `fmp_income_statement_not_in_plan`, returns `[]` |
+| `/stable/balance-sheet-statement` | ✅ allowed | logs `fmp_balance_sheet_not_in_plan`, returns `[]` |
+| `/stable/cash-flow-statement` | ✅ allowed | logs `fmp_cash_flow_not_in_plan`, returns `[]` |
+| `/stable/ratios?period=annual` | ✅ allowed | logs `fmp_ratios_blocked_skipping`, returns `[]` |
+| `/stable/ratios?period=quarter` | ❌ premium | **Auto-falls back to annual** + logs `fmp_ratios_quarter_blocked_falling_back_to_annual` |
+| `/stable/analyst-estimates` | ❌ premium | logs `fmp_analyst_estimates_not_in_plan`, returns `[]` |
+| `/stable/discounted-cash-flow-valuation` | ❌ premium | logs `fmp_dcf_not_in_plan`, returns `None` (the Valuation specialist falls back to its own DCF math via the `run_dcf` tool) |
+
+If you upgrade to a higher FMP tier, no code changes are needed — the methods will
+simply start receiving 200s where they previously got 402s.
+
 ## Documentation index
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — system diagram, rationale, trade-offs.

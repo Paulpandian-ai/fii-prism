@@ -107,6 +107,9 @@ def _quarter(period: Any) -> int | None:
 
 
 async def ingest_fundamentals(session: Session, *, fmp: FMPClient, symbol: str) -> int:
+    """Ingest the four FMP statement types. Each fetcher is wrapped so one failure
+    (HTTP 402 plan-gating, network blip, malformed payload) doesn't abort the whole
+    seed — we log + skip + continue with the next statement type."""
     total = 0
     for stmt_type, fetcher, fields in (
         (StatementType.INCOME, fmp.get_income_statement, _INCOME_FIELDS),
@@ -114,24 +117,49 @@ async def ingest_fundamentals(session: Session, *, fmp: FMPClient, symbol: str) 
         (StatementType.CASHFLOW, fmp.get_cash_flow, _CASHFLOW_FIELDS),
         (StatementType.RATIOS, fmp.get_ratios, _RATIOS_FIELDS),
     ):
-        payload = await fetcher(symbol)
+        try:
+            payload = await fetcher(symbol)
+        except Exception as exc:
+            log.warning(
+                "fundamentals_fetch_failed",
+                symbol=symbol,
+                statement=stmt_type.value,
+                error=str(exc)[:200],
+            )
+            continue
+        if not payload:
+            log.info(
+                "fundamentals_empty_payload",
+                symbol=symbol,
+                statement=stmt_type.value,
+            )
+            continue
         rows = [r for r in (_build_row(symbol, stmt_type, p, fields) for p in payload) if r]
         if not rows:
+            log.info(
+                "fundamentals_no_rows_after_parse",
+                symbol=symbol,
+                statement=stmt_type.value,
+            )
             continue
-        stmt = pg_insert(FundamentalsQuarterly).values(rows)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[
-                FundamentalsQuarterly.symbol,
-                FundamentalsQuarterly.fiscal_period_end,
-                FundamentalsQuarterly.statement_type,
-            ],
-            set_={
-                col: getattr(stmt.excluded, col)
-                for col in rows[0]
-                if col not in ("symbol", "fiscal_period_end", "statement_type")
-            },
-        )
-        session.execute(stmt)
+        try:
+            stmt = pg_insert(FundamentalsQuarterly).values(rows)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[
+                    FundamentalsQuarterly.symbol,
+                    FundamentalsQuarterly.fiscal_period_end,
+                    FundamentalsQuarterly.statement_type,
+                ],
+                set_={
+                    col: getattr(stmt.excluded, col)
+                    for col in rows[0]
+                    if col not in ("symbol", "fiscal_period_end", "statement_type")
+                },
+            )
+            session.execute(stmt)
+        except Exception:
+            log.exception("fundamentals_upsert_failed", symbol=symbol, statement=stmt_type.value)
+            continue
         total += len(rows)
         log.info("fundamentals_upserted", symbol=symbol, statement=stmt_type.value, rows=len(rows))
     return total
