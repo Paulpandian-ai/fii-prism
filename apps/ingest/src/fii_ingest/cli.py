@@ -15,13 +15,24 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import date, timedelta
+from pathlib import Path
 
-import typer
-from rich.console import Console
-from rich.table import Table
+from dotenv import load_dotenv
 
-from fii_ingest.config import get_settings
-from fii_ingest.logging import configure_logging
+# Load .env / .env.local from the repo root BEFORE any application imports so
+# downstream code that reads os.environ directly (notably the Anthropic SDK
+# wrapper in fii_agents and the data-client API-key consumers in fii_data_clients)
+# sees the keys. override=False so a real env var wins over the file.
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+load_dotenv(_REPO_ROOT / ".env.local", override=False)
+load_dotenv(_REPO_ROOT / ".env", override=False)
+
+import typer  # noqa: E402  (import after load_dotenv is intentional)
+from rich.console import Console  # noqa: E402
+from rich.table import Table  # noqa: E402
+
+from fii_ingest.config import get_settings  # noqa: E402
+from fii_ingest.logging import configure_logging  # noqa: E402
 
 app = typer.Typer(
     add_completion=False,

@@ -1,31 +1,52 @@
 """FastAPI entrypoint. `uvicorn app.main:app --reload` for local dev."""
 
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-import structlog
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 
-from app.agents_runtime import build_runtime
-from app.config import get_settings
-from app.event_runtime import set_broker
-from app.events import EventBroker
-from app.listener import shutdown_listener, start_listener_task
-from app.logging import configure_logging
-from app.middleware.correlation import CorrelationIdMiddleware
-from app.middleware.rate_limit import RateLimitMiddleware
-from app.routes.admin import router as admin_router
-from app.routes.analyses import router as analyses_router
-from app.routes.chat import router as chat_router
-from app.routes.events import router as events_router
-from app.routes.health import router as health_router
-from app.routes.journal import router as journal_router
-from app.routes.watchlist import router as watchlist_router
+# Load .env / .env.local from the repo root BEFORE any application imports so the
+# agent code in packages/agents/src/fii_agents/model.py — which reads
+# os.environ.get("ANTHROPIC_API_KEY") directly at Model.__init__ — sees the key.
+# pydantic-settings loads the file into the Settings instance but does not export
+# values back into os.environ; this load_dotenv does. override=False so a real
+# environment variable (e.g. set by ECS task definition in prod) wins over the file.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+load_dotenv(_REPO_ROOT / ".env.local", override=False)
+load_dotenv(_REPO_ROOT / ".env", override=False)
+
+import structlog  # noqa: E402  (import after load_dotenv is intentional)
+from fastapi import FastAPI  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+
+from app.agents_runtime import build_runtime  # noqa: E402
+from app.config import get_settings  # noqa: E402
+from app.event_runtime import set_broker  # noqa: E402
+from app.events import EventBroker  # noqa: E402
+from app.listener import shutdown_listener, start_listener_task  # noqa: E402
+from app.logging import configure_logging  # noqa: E402
+from app.middleware.correlation import CorrelationIdMiddleware  # noqa: E402
+from app.middleware.rate_limit import RateLimitMiddleware  # noqa: E402
+from app.routes.admin import router as admin_router  # noqa: E402
+from app.routes.analyses import router as analyses_router  # noqa: E402
+from app.routes.chat import router as chat_router  # noqa: E402
+from app.routes.events import router as events_router  # noqa: E402
+from app.routes.health import router as health_router  # noqa: E402
+from app.routes.journal import router as journal_router  # noqa: E402
+from app.routes.watchlist import router as watchlist_router  # noqa: E402
 
 _settings = get_settings()
 configure_logging(_settings.log_level)
 log = structlog.get_logger(__name__)
+# Single, no-secret startup line so we can confirm at a glance whether real-LLM
+# specialists will run. Logs the boolean only — never the key value.
+log.info(
+    "anthropic_key_status",
+    configured=bool(os.environ.get("ANTHROPIC_API_KEY")),
+    fake_mode_forced=os.environ.get("FII_USE_FAKE_MODEL") == "1",
+)
 
 
 @asynccontextmanager
