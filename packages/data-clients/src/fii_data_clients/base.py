@@ -208,7 +208,16 @@ class BaseHttpClient:
         params: Mapping[str, Any] | None = None,
         json: Any = None,
         headers: Mapping[str, str] | None = None,
+        allow_status: tuple[int, ...] = (),
     ) -> httpx.Response:
+        """Issue an HTTP request with retry, rate-limit, and circuit-breaker.
+
+        `allow_status` lets callers tolerate specific 4xx codes that aren't real errors
+        for the endpoint (e.g. FMP returns 404 for `discounted-cash-flow-valuation` when
+        no DCF is precomputed — that's a soft miss, not a misconfigured client). Codes
+        in `allow_status` skip the post-breaker raise and the response is returned
+        as-is for the caller to inspect via `resp.status_code`.
+        """
         if self._client is None:
             raise RuntimeError("BaseHttpClient must be used as an async context manager")
 
@@ -265,7 +274,7 @@ class BaseHttpClient:
             req_log.warning("circuit_open", provider=self.provider)
             raise UpstreamError(f"{self.provider} circuit open — provider unavailable") from None
 
-        if resp.status_code >= 400:
+        if resp.status_code >= 400 and resp.status_code not in allow_status:
             raise ProviderError(f"{self.provider} {resp.status_code}: {resp.text[:200]}")
         return resp
 

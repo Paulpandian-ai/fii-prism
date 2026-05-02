@@ -63,13 +63,16 @@ async def main(symbol: str) -> int:
             print(f"[fail] /stable/income-statement symbol={symbol} -> {type(exc).__name__}: {exc}")
             failed += 1
 
-        # 3. DCF (empty list → None + warning is the documented soft path).
+        # 3. DCF: empty 200 OR 404 → None + fmp_dcf_unavailable warning. Both are soft
+        # misses (FMP indicates "no precomputed DCF" inconsistently across requests),
+        # so this branch does NOT increment `failed`.
         try:
             dcf = await c.get_dcf(symbol)
             if dcf is None:
                 print(
                     f"[warn] /stable/discounted-cash-flow-valuation symbol={symbol}"
-                    " -> None (FMP returned []; fmp_dcf_unavailable logged). Soft pass."
+                    " -> None (FMP has no DCF for this ticker; fmp_dcf_unavailable"
+                    " logged). Soft pass."
                 )
             elif "dcf" in dcf:
                 print(

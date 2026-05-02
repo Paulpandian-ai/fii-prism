@@ -96,16 +96,31 @@ class FMPClient(BaseHttpClient):
 
     async def get_dcf(self, symbol: str) -> dict[str, Any] | None:
         """FMP's stable DCF endpoint is `/stable/discounted-cash-flow-valuation`. Returns
-        a one-element list when a DCF is available, or HTTP 200 with `[]` when FMP has
-        no precomputed valuation for the ticker. We treat empty as a soft miss: log a
-        warning and return None so callers can fall back to their own DCF math."""
-        data = await self.get_json(
+        a one-element list when a DCF is available. FMP indicates "no precomputed DCF"
+        inconsistently — sometimes HTTP 200 with body `[]`, sometimes HTTP 404 (with or
+        without an `[]` body). Both are soft misses: we log fmp_dcf_unavailable and
+        return None so callers can fall back to their own DCF math. True errors
+        (401/403/5xx, malformed JSON) still propagate as ProviderError.
+        """
+        sym = symbol.upper()
+        resp = await self.request(
+            "GET",
             "/stable/discounted-cash-flow-valuation",
-            params={"symbol": symbol.upper()},
+            params={"symbol": sym},
+            allow_status=(404,),
         )
+        if resp.status_code == 404:
+            log.warning("fmp_dcf_unavailable", symbol=sym, reason="http_404")
+            return None
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            from fii_data_clients.base import ProviderError
+
+            raise ProviderError(f"fmp dcf returned malformed JSON: {resp.text[:200]}") from exc
         if isinstance(data, list):
             if not data:
-                log.warning("fmp_dcf_unavailable", symbol=symbol.upper())
+                log.warning("fmp_dcf_unavailable", symbol=sym, reason="empty_200")
                 return None
             return data[0]
         return data if isinstance(data, dict) else None

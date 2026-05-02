@@ -118,19 +118,12 @@ async def test_income_statement_propagates_period_and_limit() -> None:
     assert row["period"] == "Q4"
 
 
-# --- get_dcf empty-list path ---------------------------------------------------------------
+# --- get_dcf soft-miss paths --------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_dcf_empty_list_returns_none_and_logs_warning(monkeypatch) -> None:
-    """FMP returns HTTP 200 with `[]` when a DCF is unavailable. Must not raise; must
-    return None; must emit a fmp_dcf_unavailable log line so operators see it.
-
-    Our code uses structlog directly (not stdlib logging), so we patch the module-level
-    logger's `warning` method and assert it was called with the right event name.
-    """
+def _patch_warnings(monkeypatch) -> list[tuple[str, dict]]:
+    """Capture every fmp_mod.log.warning call so tests can assert on event + kwargs."""
     captured: list[tuple[str, dict]] = []
-
     from fii_data_clients import fmp as fmp_mod
 
     original = fmp_mod.log.warning
@@ -140,6 +133,14 @@ async def test_dcf_empty_list_returns_none_and_logs_warning(monkeypatch) -> None
         return original(event, **kwargs)
 
     monkeypatch.setattr(fmp_mod.log, "warning", fake_warning)
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_dcf_empty_200_returns_none_and_logs_warning(monkeypatch) -> None:
+    """FMP returns HTTP 200 with `[]` for some tickers when a DCF is unavailable.
+    Must not raise; must return None; must emit fmp_dcf_unavailable with reason=empty_200."""
+    captured = _patch_warnings(monkeypatch)
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/stable/discounted-cash-flow-valuation"
@@ -153,10 +154,70 @@ async def test_dcf_empty_list_returns_none_and_logs_warning(monkeypatch) -> None
         await c._client.aclose()
 
     assert result is None
-    assert any(event == "fmp_dcf_unavailable" for event, _ in captured), (
-        f"expected fmp_dcf_unavailable warning; got {captured}"
-    )
+    assert any(
+        event == "fmp_dcf_unavailable" and kwargs.get("reason") == "empty_200"
+        for event, kwargs in captured
+    ), f"expected fmp_dcf_unavailable(reason=empty_200); got {captured}"
     assert any(kwargs.get("symbol") == "AAPL" for _, kwargs in captured)
+
+
+@pytest.mark.asyncio
+async def test_dcf_404_returns_none_and_logs_warning(monkeypatch) -> None:
+    """FMP also returns HTTP 404 (sometimes with body `[]`, sometimes empty body) for
+    tickers without a precomputed DCF. Must be treated identically to the empty-200
+    case: no raise, return None, fmp_dcf_unavailable with reason=http_404."""
+    captured = _patch_warnings(monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/stable/discounted-cash-flow-valuation"
+        assert dict(request.url.params)["symbol"] == "AAPL"
+        return httpx.Response(404, content=b"[]", headers={"content-type": "application/json"})
+
+    c = await _client_with_mock(handler)
+    try:
+        result = await c.get_dcf("AAPL")
+    finally:
+        await c._client.aclose()
+
+    assert result is None
+    assert any(
+        event == "fmp_dcf_unavailable" and kwargs.get("reason") == "http_404"
+        for event, kwargs in captured
+    ), f"expected fmp_dcf_unavailable(reason=http_404); got {captured}"
+
+
+@pytest.mark.asyncio
+async def test_dcf_other_4xx_still_raises() -> None:
+    """403 (auth issue) is a real error. Must propagate as ProviderError so operators
+    notice — it is NOT a soft miss."""
+    from fii_data_clients.base import ProviderError
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text="not authorized")
+
+    c = await _client_with_mock(handler)
+    try:
+        with pytest.raises(ProviderError):
+            await c.get_dcf("AAPL")
+    finally:
+        await c._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_dcf_500_still_raises() -> None:
+    """5xx is a real upstream error. Must propagate (and trip the breaker via the base
+    client's retry path)."""
+    from fii_data_clients.base import ProviderError, UpstreamError
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="server error")
+
+    c = await _client_with_mock(handler)
+    try:
+        with pytest.raises((UpstreamError, ProviderError)):
+            await c.get_dcf("AAPL")
+    finally:
+        await c._client.aclose()
 
 
 @pytest.mark.asyncio
