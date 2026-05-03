@@ -276,6 +276,95 @@ export type ChatStreamFrame =
   | { kind: "assistant_message_persisted"; message_id: string }
   | { kind: "error"; text: string };
 
+// --- Phase-2 per-specialist endpoints -----------------------------------------------------
+
+export type SpecialistName =
+  | "fundamentals"
+  | "valuation"
+  | "moat"
+  | "macro"
+  | "technical"
+  | "news"
+  | "insider"
+  | "risk";
+
+export const SPECIALIST_ORDER: readonly SpecialistName[] = [
+  "fundamentals",
+  "valuation",
+  "moat",
+  "macro",
+  "technical",
+  "news",
+  "insider",
+  "risk",
+] as const;
+
+// 'fresh' | 'stale' | 'missing' from the freshness gate.
+export type SpecialistCacheState = "fresh" | "stale" | "missing";
+
+// 'ok' | 'aborted_cap' | 'error' | 'input_too_large' | 'synthesis_invalid' from the runner.
+export type SpecialistRunStatus =
+  | "ok"
+  | "aborted_cap"
+  | "error"
+  | "input_too_large"
+  | "synthesis_invalid"
+  | string;
+
+export interface CachedSpecialistView {
+  name: SpecialistName;
+  state: SpecialistCacheState;
+  status: SpecialistRunStatus | null;
+  last_run_at: string | null;
+  expires_at: string | null;
+  cost_usd: number;
+  has_output: boolean;
+  output: Record<string, unknown> | null;
+}
+
+export interface RunSpecialistResponse {
+  name: SpecialistName;
+  symbol: string;
+  status: SpecialistRunStatus;
+  from_cache: boolean;
+  last_run_at: string;
+  expires_at: string;
+  cost_usd: number;
+  tokens_in: number;
+  tokens_out: number;
+  duration_ms: number;
+  model_used: string | null;
+  output: Record<string, unknown> | null;
+  error?: string | null;
+}
+
+export interface SynthesizeResponse {
+  analysis_id: string;
+  symbol: string;
+  status: "ok" | "synthesis_invalid";
+  final: Record<string, unknown>;
+  cost_usd: number;
+  tokens_in: number;
+  tokens_out: number;
+  duration_ms: number;
+}
+
+export interface SynthesizeBlockedDetail {
+  error: "specialists_not_ready";
+  message: string;
+  missing: string[];
+  stale: string[];
+}
+
+export interface TotalSpendResponse {
+  symbol: string;
+  specialist_spend_usd: number;
+  synthesis_spend_usd: number;
+  total_spend_usd: number;
+  specialist_rows: number;
+  analyses_rows: number;
+}
+
 // --- Live-state UI types ------------------------------------------------------------------
 
 export type NodePhase = "pending" | "running" | "complete" | "error";

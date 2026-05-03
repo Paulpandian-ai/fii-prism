@@ -16,6 +16,7 @@ import type {
   AdminStats,
   AnalysisDetail,
   AnalysisSummary,
+  CachedSpecialistView,
   ChatMessageItem,
   ChatSessionSummary,
   CircuitSnapshot,
@@ -27,6 +28,11 @@ import type {
   JournalBreakdowns,
   JournalSummary,
   RefreshEventItem,
+  RunSpecialistResponse,
+  SpecialistName,
+  SynthesizeBlockedDetail,
+  SynthesizeResponse,
+  TotalSpendResponse,
   WatchlistEntry,
 } from "./types";
 
@@ -318,4 +324,129 @@ export function useCircuitBreakers() {
 
 export function useCostCap() {
   return useQuery({ queryKey: ["admin-cost-cap"], queryFn: getCostCap, refetchInterval: 10_000 });
+}
+
+// --- Phase-2 per-specialist endpoints ----------------------------------------------------
+
+/**
+ * Thrown by `synthesizeStock` when the backend returns 400 with a structured
+ * specialists_not_ready detail. Callers can `instanceof`-check this to render
+ * the missing / stale specialist names inline rather than a generic toast.
+ */
+export class SynthesizeBlockedError extends Error {
+  readonly missing: string[];
+  readonly stale: string[];
+  constructor(detail: SynthesizeBlockedDetail) {
+    super(detail.message);
+    this.name = "SynthesizeBlockedError";
+    this.missing = detail.missing;
+    this.stale = detail.stale;
+  }
+}
+
+export function listStockSpecialists(symbol: string) {
+  return apiFetch<CachedSpecialistView[]>(
+    `/stocks/${encodeURIComponent(symbol.toUpperCase())}/specialists`,
+  );
+}
+
+export async function runStockSpecialist(
+  symbol: string,
+  name: SpecialistName,
+  body: { force?: boolean; model_tier?: "sonnet" | "haiku" } = {},
+): Promise<RunSpecialistResponse> {
+  return apiFetch<RunSpecialistResponse>(
+    `/stocks/${encodeURIComponent(symbol.toUpperCase())}/specialists/${encodeURIComponent(name)}`,
+    { method: "POST", body: JSON.stringify(body) },
+  );
+}
+
+/**
+ * Synthesize against the symbol's cached specialists. On 400 with the
+ * specialists_not_ready detail shape we throw a SynthesizeBlockedError so the
+ * UI can render missing/stale lists rather than a flat error string.
+ */
+export async function synthesizeStock(
+  symbol: string,
+  body: { use_premium?: boolean } = {},
+): Promise<SynthesizeResponse> {
+  const url = new URL(
+    `/stocks/${encodeURIComponent(symbol.toUpperCase())}/synthesize`,
+    API_BASE_URL,
+  );
+  const res = await fetch(url.toString(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 400) {
+    const payload = await res.json().catch(() => null);
+    const detail = payload?.detail;
+    if (detail && typeof detail === "object" && detail.error === "specialists_not_ready") {
+      throw new SynthesizeBlockedError(detail as SynthesizeBlockedDetail);
+    }
+    const text = await res.text().catch(() => "");
+    throw new Error(`API ${res.status}: ${text.slice(0, 200)}`);
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`API ${res.status} ${res.statusText}: ${text.slice(0, 200)}`);
+  }
+  return (await res.json()) as SynthesizeResponse;
+}
+
+export function getStockTotalSpend(symbol: string) {
+  return apiFetch<TotalSpendResponse>(
+    `/stocks/${encodeURIComponent(symbol.toUpperCase())}/total-spend`,
+  );
+}
+
+// --- Phase-2 hooks -----------------------------------------------------------------------
+
+export function useStockSpecialists(symbol: string | null | undefined) {
+  return useQuery({
+    queryKey: ["stock-specialists", symbol],
+    queryFn: () => listStockSpecialists(symbol as string),
+    enabled: Boolean(symbol),
+    staleTime: 10_000,
+  });
+}
+
+export function useRunStockSpecialist(symbol: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: {
+      name: SpecialistName;
+      force?: boolean;
+      model_tier?: "sonnet" | "haiku";
+    }) =>
+      runStockSpecialist(symbol, vars.name, {
+        force: vars.force,
+        model_tier: vars.model_tier,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["stock-specialists", symbol] });
+      qc.invalidateQueries({ queryKey: ["stock-total-spend", symbol] });
+    },
+  });
+}
+
+export function useSynthesizeStock(symbol: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { use_premium?: boolean } = {}) => synthesizeStock(symbol, vars),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["stock-total-spend", symbol] });
+      qc.invalidateQueries({ queryKey: ["analyses"] });
+    },
+  });
+}
+
+export function useStockTotalSpend(symbol: string | null | undefined) {
+  return useQuery({
+    queryKey: ["stock-total-spend", symbol],
+    queryFn: () => getStockTotalSpend(symbol as string),
+    enabled: Boolean(symbol),
+    staleTime: 10_000,
+  });
 }
