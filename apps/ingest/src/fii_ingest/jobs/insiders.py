@@ -27,6 +27,17 @@ async def ingest_insiders(
     since = date.today() - timedelta(days=days_back)
     trades = await edgar.get_form4s(symbol, since=since)
     if not trades:
+        # The EdgarClient already emits an edgar_form4_summary log distinguishing
+        # raw=0 (auth/no Form 4s) from filtered=0 (date cutoff) from parsed=0
+        # (every f.obj() raised). Mirror it at the ingest layer so the seed
+        # report has a single grep-able event for "0 insiders".
+        log.info(
+            "insiders_summary",
+            symbol=symbol,
+            since=since.isoformat(),
+            trades_returned=0,
+            persisted=0,
+        )
         return 0
 
     rows = []
@@ -50,5 +61,11 @@ async def ingest_insiders(
         return stmt.on_conflict_do_nothing(constraint="uq_insider_dedupe")
 
     chunked_upsert(session, rows, build_stmt=_build, label=f"insider_transactions:{symbol}")
-    log.info("insiders_upserted", symbol=symbol, rows=len(rows))
+    log.info(
+        "insiders_summary",
+        symbol=symbol,
+        since=since.isoformat(),
+        trades_returned=len(trades),
+        persisted=len(rows),
+    )
     return len(rows)

@@ -44,9 +44,26 @@ async def ingest_latest_10k(
 ) -> dict[str, Any]:
     record = await edgar.get_latest_10k(symbol)
     if record is None:
-        log.info("no_10k_found", symbol=symbol)
+        log.info(
+            "filings_summary",
+            symbol=symbol,
+            form="10-K",
+            raw=0,
+            persisted=0,
+            chunks=0,
+            note="no_10k_found",
+        )
         return {"filing_id": None, "chunks": 0}
-    return await _store_filing(session, edgar, embedder, symbol, record, raw_bucket)
+    result = await _store_filing(session, edgar, embedder, symbol, record, raw_bucket)
+    log.info(
+        "filings_summary",
+        symbol=symbol,
+        form="10-K",
+        raw=1,
+        persisted=1 if result["filing_id"] else 0,
+        chunks=int(result["chunks"]),
+    )
+    return result
 
 
 async def ingest_latest_10q(
@@ -59,8 +76,26 @@ async def ingest_latest_10q(
 ) -> dict[str, Any]:
     record = await edgar.get_latest_10q(symbol)
     if record is None:
+        log.info(
+            "filings_summary",
+            symbol=symbol,
+            form="10-Q",
+            raw=0,
+            persisted=0,
+            chunks=0,
+            note="no_10q_found",
+        )
         return {"filing_id": None, "chunks": 0}
-    return await _store_filing(session, edgar, embedder, symbol, record, raw_bucket)
+    result = await _store_filing(session, edgar, embedder, symbol, record, raw_bucket)
+    log.info(
+        "filings_summary",
+        symbol=symbol,
+        form="10-Q",
+        raw=1,
+        persisted=1 if result["filing_id"] else 0,
+        chunks=int(result["chunks"]),
+    )
+    return result
 
 
 async def _store_filing(

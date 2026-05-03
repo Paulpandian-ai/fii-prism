@@ -116,11 +116,32 @@ are pulled from AWS Secrets Manager by the Fargate task role.
 | `FMP_API_KEY`                 | data-clients   | Section 2+           | Not yet used                                   |
 | `FINNHUB_API_KEY`             | data-clients   | Section 2+           | Not yet used                                   |
 | `FRED_API_KEY`                | data-clients   | Section 2+           | Not yet used                                   |
+| `SEC_CONTACT_EMAIL`           | data-clients   | **Ingest pipeline**  | **Required.** Real, deliverable email — see below |
+| `EDGAR_IDENTITY`              | data-clients   | Optional override    | If set, takes precedence over `SEC_CONTACT_EMAIL` |
 | `NEXT_PUBLIC_API_BASE_URL`    | web            | Local + prod         | Baked into the static export at build time     |
 | `NEXT_PUBLIC_APP_ENV`         | web            | Local + prod         | `development` \| `dev` \| `prod`               |
 | `LOG_LEVEL`                   | API            | Always               | `debug` \| `info` \| `warn` \| `error`         |
 | `CDK_DEFAULT_ACCOUNT`         | cdk (deploy)   | Deploy               | From `aws sts get-caller-identity`             |
 | `CDK_DEFAULT_REGION`          | cdk (deploy)   | Deploy               | Defaults to `us-east-1`                        |
+
+### `SEC_CONTACT_EMAIL` is required for the ingest pipeline
+
+SEC EDGAR's compliance policy requires every API client to identify itself with a
+real, deliverable email. We send `User-Agent: FII-PRISM research <SEC_CONTACT_EMAIL>`.
+**`@example.com` addresses are silently throttled — in practice SEC returns HTTP 403
+and every filing/insider request fails.** That's how the seed pipeline ended up with
+`filings: 0, insiders: 0` for AAPL despite `edgar_call duration_ms=11669` looking
+healthy in logs.
+
+The `EdgarClient` constructor refuses to start without a real email:
+
+```bash
+# .env.local
+SEC_CONTACT_EMAIL=research@yourdomain.com
+```
+
+If you need to override the full identity string (e.g., to match a corporate naming
+convention), set `EDGAR_IDENTITY` directly — the constructor leaves it untouched.
 
 ## Production hardening (Section 10)
 
