@@ -13,6 +13,8 @@ from fii_db import NewsItem
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from fii_ingest.bulk import chunked_upsert
+
 log = structlog.get_logger(__name__)
 
 
@@ -64,9 +66,11 @@ async def ingest_company_news(
     if not rows:
         return 0
 
-    stmt = pg_insert(NewsItem).values(rows)
-    stmt = stmt.on_conflict_do_nothing(index_elements=[NewsItem.content_hash])
-    session.execute(stmt)
+    def _build(chunk: list[dict[str, Any]]):
+        stmt = pg_insert(NewsItem).values(chunk)
+        return stmt.on_conflict_do_nothing(index_elements=[NewsItem.content_hash])
+
+    chunked_upsert(session, rows, build_stmt=_build, label=f"news_items:{symbol}")
     log.info("news_upserted", symbol=symbol, rows=len(rows))
     return len(rows)
 

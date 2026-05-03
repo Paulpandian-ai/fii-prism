@@ -14,6 +14,7 @@ from fii_db import Filing, FilingChunk, FormType
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from fii_ingest.bulk import chunked_upsert
 from fii_ingest.chunking import Chunk, chunk_filing
 
 log = structlog.get_logger(__name__)
@@ -142,7 +143,11 @@ async def _insert_chunks(
 
     # Delete-then-insert: simplest way to handle re-ingestion without a dedupe key on chunks.
     session.execute(FilingChunk.__table__.delete().where(FilingChunk.filing_id == filing_id))
-    session.execute(pg_insert(FilingChunk).values(rows))
+
+    def _build(chunk_rows: list[dict[str, Any]]):
+        return pg_insert(FilingChunk).values(chunk_rows)
+
+    chunked_upsert(session, rows, build_stmt=_build, label=f"filing_chunks:{filing_id}")
     return len(rows)
 
 

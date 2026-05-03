@@ -12,6 +12,8 @@ from fii_db import InsiderTransaction
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from fii_ingest.bulk import chunked_upsert
+
 log = structlog.get_logger(__name__)
 
 
@@ -43,8 +45,10 @@ async def ingest_insiders(
             }
         )
 
-    stmt = pg_insert(InsiderTransaction).values(rows)
-    stmt = stmt.on_conflict_do_nothing(constraint="uq_insider_dedupe")
-    session.execute(stmt)
+    def _build(chunk: list[dict[str, Any]]):
+        stmt = pg_insert(InsiderTransaction).values(chunk)
+        return stmt.on_conflict_do_nothing(constraint="uq_insider_dedupe")
+
+    chunked_upsert(session, rows, build_stmt=_build, label=f"insider_transactions:{symbol}")
     log.info("insiders_upserted", symbol=symbol, rows=len(rows))
     return len(rows)

@@ -12,6 +12,8 @@ from fii_db import PriceDaily, PriceIntraday
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from fii_ingest.bulk import chunked_upsert
+
 log = structlog.get_logger(__name__)
 
 
@@ -56,21 +58,23 @@ async def ingest_daily(
     if not rows:
         return 0
 
-    stmt = pg_insert(PriceDaily).values(rows)
-    stmt = stmt.on_conflict_do_update(
-        index_elements=[PriceDaily.symbol, PriceDaily.trade_date],
-        set_={
-            "open": stmt.excluded.open,
-            "high": stmt.excluded.high,
-            "low": stmt.excluded.low,
-            "close": stmt.excluded.close,
-            "adjusted_close": stmt.excluded.adjusted_close,
-            "volume": stmt.excluded.volume,
-            "vwap": stmt.excluded.vwap,
-            "source": stmt.excluded.source,
-        },
-    )
-    session.execute(stmt)
+    def _build(chunk: list[dict[str, Any]]):
+        stmt = pg_insert(PriceDaily).values(chunk)
+        return stmt.on_conflict_do_update(
+            index_elements=[PriceDaily.symbol, PriceDaily.trade_date],
+            set_={
+                "open": stmt.excluded.open,
+                "high": stmt.excluded.high,
+                "low": stmt.excluded.low,
+                "close": stmt.excluded.close,
+                "adjusted_close": stmt.excluded.adjusted_close,
+                "volume": stmt.excluded.volume,
+                "vwap": stmt.excluded.vwap,
+                "source": stmt.excluded.source,
+            },
+        )
+
+    chunked_upsert(session, rows, build_stmt=_build, label=f"prices_daily:{symbol}")
     log.info("daily_prices_upserted", symbol=symbol, rows=len(rows))
     return len(rows)
 
@@ -109,8 +113,12 @@ async def ingest_intraday(
     if not rows:
         return 0
 
-    stmt = pg_insert(PriceIntraday).values(rows)
-    stmt = stmt.on_conflict_do_nothing(index_elements=[PriceIntraday.symbol, PriceIntraday.bar_ts])
-    session.execute(stmt)
+    def _build(chunk: list[dict[str, Any]]):
+        stmt = pg_insert(PriceIntraday).values(chunk)
+        return stmt.on_conflict_do_nothing(
+            index_elements=[PriceIntraday.symbol, PriceIntraday.bar_ts]
+        )
+
+    chunked_upsert(session, rows, build_stmt=_build, label=f"prices_intraday:{symbol}")
     log.info("intraday_prices_upserted", symbol=symbol, rows=len(rows))
     return len(rows)

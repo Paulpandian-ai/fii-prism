@@ -12,6 +12,8 @@ from fii_db import MacroSeries
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from fii_ingest.bulk import chunked_upsert
+
 log = structlog.get_logger(__name__)
 
 
@@ -41,12 +43,15 @@ async def ingest_series(session: Session, *, fred: FredClient, series_id: str) -
         )
     if not rows:
         return 0
-    stmt = pg_insert(MacroSeries).values(rows)
-    stmt = stmt.on_conflict_do_update(
-        index_elements=[MacroSeries.series_id, MacroSeries.observation_date],
-        set_={"value": stmt.excluded.value},
-    )
-    session.execute(stmt)
+
+    def _build(chunk: list[dict[str, Any]]):
+        stmt = pg_insert(MacroSeries).values(chunk)
+        return stmt.on_conflict_do_update(
+            index_elements=[MacroSeries.series_id, MacroSeries.observation_date],
+            set_={"value": stmt.excluded.value},
+        )
+
+    chunked_upsert(session, rows, build_stmt=_build, label=f"macro_series:{series_id}")
     log.info("macro_series_upserted", series=series_id, rows=len(rows))
     return len(rows)
 
