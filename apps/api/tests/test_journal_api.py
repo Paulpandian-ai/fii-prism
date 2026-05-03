@@ -109,7 +109,7 @@ def test_patch_decision_persists_action(client):
     from fii_db.session import session_scope
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-    symbol = f"ZZD{uuid.uuid4().hex[:6].upper()}"
+    symbol = "ZZD" + ("".join(c for c in uuid.uuid4().hex.upper() if c.isalpha()) + "AAAA")[:4]
     factory = get_runtime().session_factory
     with session_scope(factory) as s:
         s.execute(

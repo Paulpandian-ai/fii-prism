@@ -46,8 +46,10 @@ def test_post_analyses_returns_id(client):
 
 def test_get_analysis_and_list(client):
     # Unique per-test symbol so the per-minute idempotency_key dedupe doesn't fold this
-    # run into a prior test's analysis_id.
-    symbol = f"ZZL{uuid.uuid4().hex[:6].upper()}"
+    # run into a prior test's analysis_id. Letters-only suffix avoids tripping the
+    # NumericClaimsMixin regex inside RiskOutput.qualitative_summary on substrings
+    # like "8B" / "1F" interpreted as uncited numeric claims.
+    symbol = "ZZL" + ("".join(c for c in uuid.uuid4().hex.upper() if c.isalpha()) + "AAAA")[:4]
     _seed_ticker(symbol)
     created = client.post("/analyses", json={"symbol": symbol, "analysis_type": "deep_dive"}).json()
     analysis_id = created["analysis_id"]
