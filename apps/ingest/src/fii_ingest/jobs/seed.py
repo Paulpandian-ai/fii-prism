@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from typing import TypeVar
 
 import structlog
 from fii_data_clients import (
@@ -59,6 +62,46 @@ class SeedReport:
             "macro_rows": self.macro_rows,
             "errors": self.errors,
         }
+
+
+T = TypeVar("T")
+
+
+async def _step(
+    *, symbol: str, name: str, fn: Callable[[], Awaitable[T]]
+) -> tuple[T | None, Exception | None]:
+    """Run one seed step and emit start/complete log lines around it.
+
+    Catches any exception so the caller can record it on the report and move
+    on — keeps the existing per-step error-isolation behavior. Returns the
+    tuple ``(result, exc)`` so callers can branch without re-raising.
+    """
+    start = time.perf_counter()
+    log.info("seed_step_start", symbol=symbol, step=name)
+    try:
+        result = await fn()
+    except Exception as exc:
+        log.exception(
+            "seed_step_failed",
+            symbol=symbol,
+            step=name,
+            duration_ms=int((time.perf_counter() - start) * 1000),
+        )
+        return None, exc
+    log.info(
+        "seed_step_complete",
+        symbol=symbol,
+        step=name,
+        duration_ms=int((time.perf_counter() - start) * 1000),
+    )
+    return result, None
+
+
+def _step_skipped(*, symbol: str, name: str, reason: str) -> None:
+    """Surface a step that's being deliberately skipped. The previous
+    embedder-gated 10-K/10-Q skip emitted nothing and looked identical to a
+    successful zero-rows run; that's how the bug was hiding."""
+    log.warning("seed_step_skipped", symbol=symbol, step=name, reason=reason)
 
 
 async def seed_ticker(
@@ -129,31 +172,55 @@ async def seed_ticker(
             log.exception("embedder_init_failed")
             embedder = None
 
-        if embedder:
-            try:
+        if not embedder:
+            # Bug 2 root cause: this branch used to silently skip 10-K/10-Q
+            # ingest with no log line — the seed report showed filings_10k=0 /
+            # filings_10q=0 and there was no way to tell whether the path ran
+            # or got gated out. Now we surface it explicitly.
+            reason = (
+                "include_embeddings=False"
+                if not include_embeddings
+                else "embedder_init_failed (see embedder_init_failed log above)"
+            )
+            _step_skipped(symbol=symbol, name="10k", reason=reason)
+            _step_skipped(symbol=symbol, name="10q", reason=reason)
+            report.errors.append(
+                f"filings: skipped — {reason}. Set VOYAGE_API_KEY or fix Bedrock to enable."
+            )
+        else:
+            async def _do_10k():
                 with session_scope(factory) as s:
-                    r10k = await ingest_latest_10k(
+                    return await ingest_latest_10k(
                         s,
                         edgar=edgar,
                         embedder=embedder,
                         symbol=symbol,
                         raw_bucket=settings.raw_data_bucket,
                     )
-                    report.filings_10k = 1 if r10k["filing_id"] else 0
-                    report.filing_chunks += int(r10k["chunks"])
+
+            r10k, exc10k = await _step(symbol=symbol, name="10k", fn=_do_10k)
+            if exc10k is not None:
+                report.errors.append(f"edgar_filings_10k: {exc10k}")
+            elif r10k is not None:
+                report.filings_10k = 1 if r10k["filing_id"] else 0
+                report.filing_chunks += int(r10k["chunks"])
+
+            async def _do_10q():
                 with session_scope(factory) as s:
-                    r10q = await ingest_latest_10q(
+                    return await ingest_latest_10q(
                         s,
                         edgar=edgar,
                         embedder=embedder,
                         symbol=symbol,
                         raw_bucket=settings.raw_data_bucket,
                     )
-                    report.filings_10q = 1 if r10q["filing_id"] else 0
-                    report.filing_chunks += int(r10q["chunks"])
-            except Exception as exc:
-                report.errors.append(f"edgar_filings: {exc}")
-                log.exception("edgar_filings_failed", symbol=symbol)
+
+            r10q, exc10q = await _step(symbol=symbol, name="10q", fn=_do_10q)
+            if exc10q is not None:
+                report.errors.append(f"edgar_filings_10q: {exc10q}")
+            elif r10q is not None:
+                report.filings_10q = 1 if r10q["filing_id"] else 0
+                report.filing_chunks += int(r10q["chunks"])
 
     # --- Insider transactions ------------------------------------------------------------
     try:

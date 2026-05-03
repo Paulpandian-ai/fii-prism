@@ -82,17 +82,20 @@ async def test_partial_failure_isolates_per_series(session_factory):
 
 
 def test_default_series_no_longer_includes_discontinued_gold():
-    """The discontinued GOLDAMGBD228NLBM series is replaced by the still-active
-    GOLDPMGBD228NLBM (London PM fix). Documenting this with a tight assertion
-    so a regression that re-adds the dead series shows up in tests."""
+    """Both GOLDAMGBD228NLBM (London AM fix) and GOLDPMGBD228NLBM (London PM
+    fix) have been discontinued by FRED — both return HTTP 400. The default
+    catalog now omits gold entirely; this test pins that decision so a future
+    regression that re-adds either series shows up immediately."""
     from fii_data_clients import DEFAULT_MACRO_SERIES
 
-    assert "GOLDAMGBD228NLBM" not in DEFAULT_MACRO_SERIES, (
-        "GOLDAMGBD228NLBM was discontinued by FRED; remove it from defaults"
-    )
-    # We keep at least one gold series in the default catalog.
-    assert any("GOLD" in s for s in DEFAULT_MACRO_SERIES), (
-        "expected a gold series (GOLDPMGBD228NLBM) in DEFAULT_MACRO_SERIES"
+    for dead in ("GOLDAMGBD228NLBM", "GOLDPMGBD228NLBM"):
+        assert dead not in DEFAULT_MACRO_SERIES, (
+            f"{dead} was discontinued by FRED; remove it from defaults"
+        )
+    # No gold series in the catalog — gold isn't load-bearing for any specialist.
+    assert not any("GOLD" in s for s in DEFAULT_MACRO_SERIES), (
+        "DEFAULT_MACRO_SERIES contains a GOLD-prefixed series; FRED has discontinued "
+        "all gold-fix series. If you need gold, wire a different data source."
     )
 
 

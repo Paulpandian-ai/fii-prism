@@ -199,18 +199,26 @@ class EdgarClient:
                 )
                 continue
             n_parsed += 1
-            transactions = getattr(parsed, "transactions", None) or []
-            owner_name = str(getattr(parsed, "owner_name", "")) or "unknown"
-            role = str(getattr(parsed, "officer_title", "") or "") or None
-            for t in transactions:
+            owner_name, role = _form4_owner(parsed)
+            txns = _form4_transactions(parsed, accession_no=str(f.accession_no))
+            if not txns:
+                # Surface zero-transaction parses at DEBUG so a future edgartools
+                # schema change shows up loudly in seed logs (with sampled `dir`).
+                log.debug(
+                    "form4_no_transactions",
+                    symbol=symbol,
+                    accession_no=str(getattr(f, "accession_no", "")),
+                    parsed_attrs=str([a for a in dir(parsed) if not a.startswith("_")])[:200],
+                )
+            for t in txns:
                 out.append(
                     InsiderTrade(
                         insider_name=owner_name,
                         role=role,
-                        transaction_type=str(getattr(t, "code", "") or "") or None,
-                        shares=_to_float(getattr(t, "shares", None)),
-                        price=_to_float(getattr(t, "price", None)),
-                        transaction_date=_to_date(getattr(t, "date", None)) or filed,
+                        transaction_type=t["transaction_type"],
+                        shares=t["shares"],
+                        price=t["price"],
+                        transaction_date=t["transaction_date"] or filed,
                         filed_at=filed,
                         accession_no=str(f.accession_no),
                     )
@@ -227,6 +235,100 @@ class EdgarClient:
             transactions_emitted=len(out),
         )
         return out
+
+
+def _form4_owner(parsed: Any) -> tuple[str, str | None]:
+    """Pull (name, role) from a parsed edgartools Form 4 / Ownership object.
+
+    edgartools 5.30.2 exposes owner data via parsed.reporting_owners.owners — a
+    list of Owner dataclasses with `name`, `officer_title`, `is_officer`,
+    `is_director` etc. The previous code read parsed.owner_name / .officer_title
+    directly which doesn't exist on the Form4 class and silently returned
+    "unknown" / None.
+
+    Returns ("unknown", None) when the structure is missing or empty rather
+    than raising — single-Form4 parse failures shouldn't kill the whole loop.
+    """
+    try:
+        owners = getattr(getattr(parsed, "reporting_owners", None), "owners", None) or []
+        if not owners:
+            return "unknown", None
+        first = owners[0]
+        name = (getattr(first, "name", None) or "").strip() or "unknown"
+        title_attr = getattr(first, "officer_title", None) or ""
+        role: str | None = title_attr.strip() if isinstance(title_attr, str) else None
+        if not role:
+            # Fall back to the position derivation used by edgartools' display logic.
+            position = getattr(first, "position", None)
+            role = position if isinstance(position, str) and position else None
+        return name, role
+    except Exception as exc:
+        log.debug("form4_owner_extract_failed", exc=str(exc))
+        return "unknown", None
+
+
+def _form4_transactions(parsed: Any, *, accession_no: str) -> list[dict[str, Any]]:
+    """Pull every transaction (non-derivative AND derivative) out of a parsed
+    edgartools Form 4 / Ownership object.
+
+    edgartools 5.30.2 schema:
+      - parsed.non_derivative_table.transactions: NonDerivativeTransactions(DataHolder)
+      - parsed.derivative_table.transactions:     DerivativeTransactions(DataHolder)
+
+    Both wrap a pandas DataFrame at `.data` and support __getitem__ → returns a
+    typed dataclass with `date`, `shares`, `price`, `transaction_code`,
+    `acquired_disposed`, `direct_indirect`, `security`, `transaction_type`.
+
+    We unify into a flat list of dicts (the InsiderTrade builder above turns
+    them into rows). transaction_type is the SEC code (P, S, A, M, F...) so it
+    matches the existing schema's expectation; the human-readable label lives
+    on the dataclass too if we ever want to surface it.
+    """
+    out: list[dict[str, Any]] = []
+    for table_name in ("non_derivative_table", "derivative_table"):
+        table = getattr(parsed, table_name, None)
+        if table is None:
+            continue
+        txns_holder = getattr(table, "transactions", None)
+        if txns_holder is None:
+            continue
+        # DataHolder.empty / .data are the documented surfaces.
+        if getattr(txns_holder, "empty", True):
+            continue
+        data = getattr(txns_holder, "data", None)
+        if data is None:
+            continue
+        try:
+            n = len(data)
+        except Exception:
+            n = 0
+        for i in range(n):
+            try:
+                t = txns_holder[i]
+            except Exception as exc:
+                log.warning(
+                    "edgar_parse_failed",
+                    fn="parse_form4_transaction_row",
+                    accession_no=accession_no,
+                    table=table_name,
+                    index=i,
+                    exc=str(exc),
+                    exc_type=type(exc).__name__,
+                )
+                continue
+            out.append(
+                {
+                    "transaction_date": _to_date(getattr(t, "date", None)),
+                    "shares": _to_float(getattr(t, "shares", None)),
+                    "price": _to_float(getattr(t, "price", None)),
+                    # SEC transaction code: P (purchase), S (sale), A (grant),
+                    # M (option exercise), F (tax withholding), G (gift), etc.
+                    "transaction_type": (
+                        str(getattr(t, "transaction_code", "") or "") or None
+                    ),
+                }
+            )
+    return out
 
 
 def _to_date(v: Any) -> date | None:

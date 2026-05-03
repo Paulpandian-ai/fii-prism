@@ -66,9 +66,11 @@ DEFAULT_MACRO_SERIES: tuple[str, ...] = (
     "T10Y2Y",
     "VIXCLS",
     "DCOILWTICO",
-    # GOLDAMGBD228NLBM (London AM fix) was discontinued by FRED — returns HTTP
-    # 400 on lookup. Use the still-active PM fix (GOLDPMGBD228NLBM) instead.
-    "GOLDPMGBD228NLBM",
+    # Both GOLDAMGBD228NLBM (London AM fix) and GOLDPMGBD228NLBM (London PM fix)
+    # have been discontinued by FRED — both return HTTP 400. Gold isn't critical
+    # for any specialist, so the catalog drops it entirely. If a future
+    # specialist needs gold, wire one of FRED's still-active proxies (e.g.,
+    # the World Bank PINK_SHEETS gold price index via custom ingest).
     "DEXUSEU",
     "DEXCHUS",
     "USRECD",
