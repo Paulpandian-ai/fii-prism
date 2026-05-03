@@ -105,7 +105,27 @@ def expires_at(name: str, last_run_at: datetime) -> datetime:
 # --- Per-specialist run caps -------------------------------------------------------------
 
 DEFAULT_PER_SPECIALIST_CALL_CAP = 25
-DEFAULT_PER_SPECIALIST_COST_CAP_USD = 0.30
+DEFAULT_PER_SPECIALIST_COST_CAP_USD = 0.25
+
+
+# Per-specialist hard cost ceiling. Tiers reflect the heaviness of each
+# specialist's reasoning + data: Fundamentals reads filings + 4 statement types,
+# so it gets the widest budget. Moat/Valuation are mid-weight (RAG-heavy and
+# multi-DCF respectively). News/Macro/Technical/Insider/Risk are quick-look
+# specialists. Synthesis is listed for completeness — it has its own attempt
+# cap (synthesis_max_attempts), but the cost lookup is here so future
+# enforcement can read from the same source.
+_DEFAULT_COST_CAP_USD: Mapping[str, float] = {
+    "fundamentals": 0.60,
+    "moat": 0.40,
+    "valuation": 0.40,
+    "synthesis": 0.40,
+    "news": 0.25,
+    "macro": 0.25,
+    "technical": 0.25,
+    "insider": 0.25,
+    "risk": 0.25,
+}
 
 
 def call_cap(name: str) -> int:
@@ -120,16 +140,35 @@ def call_cap(name: str) -> int:
 
 
 def cost_cap_usd(name: str) -> float:
+    """Per-specialist hard cost ceiling.
+
+    Lookup precedence:
+      1. ``FII_COST_CAP_<NAME>`` env var (preferred)
+      2. ``FII_CAP_COST_USD_<NAME>`` env var (legacy alias from Phase 1)
+      3. Per-name default in ``_DEFAULT_COST_CAP_USD``
+      4. ``FII_COST_CAP_DEFAULT`` / ``FII_CAP_COST_USD_DEFAULT`` env vars
+      5. Hardcoded ``DEFAULT_PER_SPECIALIST_COST_CAP_USD`` ($0.25)
+    """
     name = canonical_name(name)
-    env = os.environ.get(f"FII_CAP_COST_USD_{name.upper()}")
-    if env:
-        try:
-            return float(env)
-        except ValueError:
-            pass
-    return float(
-        os.environ.get("FII_CAP_COST_USD_DEFAULT", DEFAULT_PER_SPECIALIST_COST_CAP_USD)
+    for env_name in (f"FII_COST_CAP_{name.upper()}", f"FII_CAP_COST_USD_{name.upper()}"):
+        env = os.environ.get(env_name)
+        if env:
+            try:
+                return float(env)
+            except ValueError:
+                pass
+    if name in _DEFAULT_COST_CAP_USD:
+        return _DEFAULT_COST_CAP_USD[name]
+    fallback = os.environ.get(
+        "FII_COST_CAP_DEFAULT",
+        os.environ.get(
+            "FII_CAP_COST_USD_DEFAULT", str(DEFAULT_PER_SPECIALIST_COST_CAP_USD)
+        ),
     )
+    try:
+        return float(fallback)
+    except ValueError:
+        return DEFAULT_PER_SPECIALIST_COST_CAP_USD
 
 
 # --- In-prompt soft tool-call budget -----------------------------------------------------

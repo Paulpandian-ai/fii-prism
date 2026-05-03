@@ -359,3 +359,134 @@ async def test_fundamentals_cost_persisted_when_call_cap_hits(session_factory, m
         assert row.tokens_out == 3 * 120
 
     _wipe_cache(session_factory, sym)
+
+
+# --- 6. Fundamentals normal run completes under the new $0.60 budget --------------------
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_default_cap_is_60_cents_and_normal_run_completes_within(
+    session_factory, monkeypatch
+):
+    """Sanity check on the new tiered cost-cap defaults plus an end-to-end
+    real-path simulation that finishes WITHIN the $0.60 fundamentals budget.
+
+    The mock model emits four tool-use turns (a realistic 'plan + read income +
+    read ratios + finalize' shape) then a valid FundamentalsOutput. Each call
+    burns Sonnet-tier tokens (~1.5K in / 300 out) which approximates a real
+    run; the test asserts the loop returns status='ok' with a cost well under
+    the new $0.60 cap.
+    """
+    from fii_agents.budget import estimate_cost_usd
+    from fii_agents.cache_policy import _DEFAULT_COST_CAP_USD, cost_cap_usd
+    from fii_agents.model import MODEL_SONNET, ModelCall
+    from fii_agents.specialists.base import SpecialistContext
+    from fii_agents.specialists.fundamentals import (
+        FundamentalsSpecialist,
+        _build_output_from_raw,
+    )
+
+    # 1. Defaults table reflects the requested tiers.
+    assert cost_cap_usd("fundamentals") == 0.60
+    assert cost_cap_usd("moat") == 0.40
+    assert cost_cap_usd("valuation") == 0.40
+    assert cost_cap_usd("synthesis") == 0.40
+    for q in ("news", "macro", "technical", "insider", "risk"):
+        assert cost_cap_usd(q) == 0.25, q
+    # The mapping is exhaustive — no specialist falls back to the global default.
+    assert set(_DEFAULT_COST_CAP_USD).issuperset(
+        {"fundamentals", "moat", "valuation", "synthesis", "news", "macro", "technical",
+         "insider", "risk"}
+    )
+
+    # 2. Env override on the new var name takes precedence.
+    monkeypatch.setenv("FII_COST_CAP_FUNDAMENTALS", "1.23")
+    assert cost_cap_usd("fundamentals") == 1.23
+    monkeypatch.delenv("FII_COST_CAP_FUNDAMENTALS")
+
+    # 3. Real-path run simulation — never hits the cap on a normal flow.
+    sym = "TSTBUDGET"
+    _wipe_cache(session_factory, sym)
+    _seed_ticker(session_factory, sym)
+    monkeypatch.delenv("FII_USE_FAKE_MODEL", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-no-real-call")
+
+    valid_output = _build_output_from_raw(
+        sym, income={}, ratios={}, ndebt={}, is_stub=False, has_10k=True
+    )
+    valid_json = valid_output.model_dump_json()
+
+    turns = [
+        ModelCall(
+            text="Planning. I'll start with the income statement.",
+            tool_calls=[
+                {"id": "c1", "name": "get_income_statement", "input": {"symbol": sym, "periods": 8}}
+            ],
+            stop_reason="tool_use",
+            tokens_in=1500,
+            tokens_out=300,
+            model=MODEL_SONNET,
+        ),
+        ModelCall(
+            text="Now ratios.",
+            tool_calls=[
+                {"id": "c2", "name": "get_ratios", "input": {"symbol": sym, "periods": 4}}
+            ],
+            stop_reason="tool_use",
+            tokens_in=1600,
+            tokens_out=280,
+            model=MODEL_SONNET,
+        ),
+        ModelCall(
+            text="Net debt now.",
+            tool_calls=[
+                {"id": "c3", "name": "calculate_net_debt_to_ebitda", "input": {"symbol": sym}}
+            ],
+            stop_reason="tool_use",
+            tokens_in=1700,
+            tokens_out=240,
+            model=MODEL_SONNET,
+        ),
+        ModelCall(
+            text=valid_json,
+            tool_calls=[],
+            stop_reason="end_turn",
+            tokens_in=1900,
+            tokens_out=900,
+            model=MODEL_SONNET,
+        ),
+    ]
+    expected_cost = sum(estimate_cost_usd(c.model, c.tokens_in, c.tokens_out) for c in turns)
+
+    class _ScriptedModel:
+        model_id = MODEL_SONNET
+        is_fake = False
+
+        def __init__(self) -> None:
+            self._i = 0
+
+        async def respond(self, *, system, messages, tools=None, tool_choice=None):
+            call = turns[self._i]
+            self._i += 1
+            return call
+
+    ctx = SpecialistContext(
+        symbol=sym,
+        analysis_id="00000000-0000-0000-0000-000000000000",
+        user_id="00000000-0000-0000-0000-000000000000",
+        factory=session_factory,
+        embedder=_Embedder(),
+        raw_bucket=None,
+    )
+    result = await FundamentalsSpecialist().run(ctx, _ScriptedModel())
+
+    assert result.status == "ok", f"expected ok, got {result.status}: {result.error}"
+    assert result.error is None
+    assert result.output is not None
+    assert result.cost_usd == pytest.approx(expected_cost, rel=1e-6)
+    assert result.cost_usd < cost_cap_usd("fundamentals"), (
+        f"normal run cost ${result.cost_usd:.4f} should be < ${cost_cap_usd('fundamentals'):.2f}"
+    )
+    assert result.model_calls == 4
+
+    _wipe_cache(session_factory, sym)
