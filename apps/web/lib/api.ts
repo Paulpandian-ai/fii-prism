@@ -23,6 +23,7 @@ import type {
   CostCapStatus,
   CreateAnalysisRequest,
   CreateAnalysisResponse,
+  CritiqueRow,
   DecisionRow,
   DecisionUpsertRequest,
   JournalBreakdowns,
@@ -34,6 +35,7 @@ import type {
   SynthesizeResponse,
   TotalSpendResponse,
   TotalSpendSummary,
+  UploadCritiqueResponse,
   WatchlistEntry,
 } from "./types";
 
@@ -313,6 +315,70 @@ export function getCostCap() {
 
 export function getAdminTotalSpend() {
   return apiFetch<TotalSpendSummary>("/admin/total-spend");
+}
+
+// --- Report critiques --------------------------------------------------------------------
+
+export async function uploadCritique(form: FormData): Promise<UploadCritiqueResponse> {
+  const url = new URL("/critiques/upload", API_BASE_URL);
+  // Don't set Content-Type — the browser sets the multipart boundary correctly.
+  const res = await fetch(url.toString(), { method: "POST", body: form });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`API ${res.status} ${res.statusText}: ${text.slice(0, 200)}`);
+  }
+  return (await res.json()) as UploadCritiqueResponse;
+}
+
+export function getCritique(critiqueId: string) {
+  return apiFetch<CritiqueRow>(`/critiques/${encodeURIComponent(critiqueId)}`);
+}
+
+export function runCritique(critiqueId: string) {
+  return apiFetch<CritiqueRow>(`/critiques/${encodeURIComponent(critiqueId)}/run`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function listStockCritiques(symbol: string) {
+  return apiFetch<CritiqueRow[]>(
+    `/stocks/${encodeURIComponent(symbol.toUpperCase())}/critiques`,
+  );
+}
+
+export function useCritique(critiqueId: string | null | undefined) {
+  return useQuery({
+    queryKey: ["critique", critiqueId],
+    queryFn: () => getCritique(critiqueId as string),
+    enabled: Boolean(critiqueId),
+    refetchInterval: (q) => {
+      const data = q.state.data as CritiqueRow | undefined;
+      // Poll while pending/running so the detail page picks up completion.
+      return data && (data.status === "pending" || data.status === "running") ? 2000 : false;
+    },
+  });
+}
+
+export function useRunCritique(critiqueId: string | null | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => runCritique(critiqueId as string),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["critique", critiqueId] }),
+  });
+}
+
+export function useUploadCritique() {
+  return useMutation({ mutationFn: uploadCritique });
+}
+
+export function useStockCritiques(symbol: string | null | undefined) {
+  return useQuery({
+    queryKey: ["stock-critiques", symbol],
+    queryFn: () => listStockCritiques(symbol as string),
+    enabled: Boolean(symbol),
+    staleTime: 30_000,
+  });
 }
 
 export function useAdminTotalSpend() {

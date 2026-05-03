@@ -32,6 +32,8 @@ from app.middleware.rate_limit import RateLimitMiddleware  # noqa: E402
 from app.routes.admin import router as admin_router  # noqa: E402
 from app.routes.analyses import router as analyses_router  # noqa: E402
 from app.routes.chat import router as chat_router  # noqa: E402
+from app.routes.critiques import router as critiques_router  # noqa: E402
+from app.routes.critiques import stocks_router as critiques_by_stock_router  # noqa: E402
 from app.routes.events import router as events_router  # noqa: E402
 from app.routes.health import router as health_router  # noqa: E402
 from app.routes.journal import router as journal_router  # noqa: E402
@@ -128,6 +130,8 @@ app.add_middleware(CorrelationIdMiddleware)
 app.include_router(health_router)
 app.include_router(analyses_router)
 app.include_router(stocks_router)
+app.include_router(critiques_router)
+app.include_router(critiques_by_stock_router)
 app.include_router(watchlist_router)
 app.include_router(events_router)
 app.include_router(chat_router)

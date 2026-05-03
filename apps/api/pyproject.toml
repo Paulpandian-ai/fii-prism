@@ -14,6 +14,9 @@ dependencies = [
     "alembic>=1.14.0",
     "httpx>=0.28.1",
     "python-dotenv>=1.0.1",
+    # Multipart upload parser used by /critiques/upload (PDF). FastAPI's
+    # File / Form / UploadFile depend on it.
+    "python-multipart>=0.0.18",
     "fii-shared",
     "fii-db",
     "fii-agents",

@@ -1,5 +1,16 @@
 """Shared Pydantic schemas for FII-PRISM. Canonical domain types live here."""
 
+from fii_shared.critiques import (
+    BiasIndicator,
+    BiasSeverity,
+    BiasType,
+    ExtractedReportClaims,
+    NumericalAccuracyItem,
+    NumericVerdict,
+    ReliabilityRating,
+    ReportCritique,
+    ReportSource,
+)
 from fii_shared.orchestrator import (
     EDUCATIONAL_DISCLAIMER,
     CostSummary,
@@ -65,6 +76,10 @@ __all__ = [
     # existing (Section 1)
     "AgentRunStatus",
     "AnalysisRun",
+    # critiques
+    "BiasIndicator",
+    "BiasSeverity",
+    "BiasType",
     "BreakerState",
     # specialist outputs
     "BullBearDebateOutput",
@@ -79,6 +94,7 @@ __all__ = [
     "CostSummary",
     "DeepDiveRequest",
     "DfastScenario",
+    "ExtractedReportClaims",
     "FiveForces",
     "FundamentalsOutput",
     "GoNoGo",
@@ -94,9 +110,14 @@ __all__ = [
     "NewsSentimentOutput",
     # validation
     "NumericClaimsMixin",
+    "NumericVerdict",
+    "NumericalAccuracyItem",
     "OrchestratorFinalOutput",
     "RatesTrajectory",
     "Recommendation",
+    "ReliabilityRating",
+    "ReportCritique",
+    "ReportSource",
     "ReprompTicket",
     "RiskOutput",
     "Signal",

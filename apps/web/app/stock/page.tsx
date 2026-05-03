@@ -7,6 +7,7 @@ import { Suspense } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Disclaimer } from "@/components/chrome/disclaimer";
+import { RecentCritiques } from "@/components/stock/recent-critiques";
 import { SpecialistGrid } from "@/components/stock/specialist-grid";
 import { SynthesisSection } from "@/components/stock/synthesis-section";
 import { TotalSpendBadge } from "@/components/stock/total-spend-badge";
@@ -96,6 +97,7 @@ function StockOverviewInner() {
         <>
           <SpecialistGrid symbol={symbol} views={views} />
           <SynthesisSection symbol={symbol} views={views} />
+          <RecentCritiques symbol={symbol} />
         </>
       )}
 

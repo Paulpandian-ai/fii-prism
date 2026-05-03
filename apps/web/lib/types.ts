@@ -175,6 +175,101 @@ export interface CostCapStatus {
   midnight_resets_at: string;
 }
 
+// --- Report critique flow ----------------------------------------------------------------
+
+export type ReportSource = "morningstar" | "seeking_alpha" | "sell_side" | "other";
+export type ReliabilityRating = "high" | "medium" | "low" | "do_not_rely";
+export type NumericVerdict = "matches" | "differs" | "unverifiable";
+export type BiasType =
+  | "disclosed_position"
+  | "paid_promotion"
+  | "perma_bull"
+  | "language_bias"
+  | "selective_data"
+  | "missing_disclosure";
+export type BiasSeverity = "low" | "medium" | "high";
+
+export interface ExtractedReportClaims {
+  symbol: string;
+  report_source: string;
+  analyst_name: string | null;
+  publication_date: string | null;
+  recommendation: string | null;
+  price_target: import("@fii/shared/schemas").CitedNumber | null;
+  time_horizon: string | null;
+  bull_case_summary: string;
+  bear_case_summary: string;
+  key_numerical_claims: import("@fii/shared/schemas").CitedClaim[];
+  key_qualitative_claims: import("@fii/shared/schemas").CitedClaim[];
+  stated_assumptions: string[];
+  analyst_disclosures: string[];
+}
+
+export interface NumericalAccuracyItem {
+  claim: string;
+  report_says: string;
+  our_data_says: string;
+  verdict: NumericVerdict;
+  difference_explanation: string | null;
+}
+
+export interface BiasIndicator {
+  type: BiasType;
+  evidence: string;
+  severity: BiasSeverity;
+}
+
+export interface ReportCritiqueDoc {
+  critique_id: string;
+  symbol: string;
+  report_source: string;
+  analyst_name: string | null;
+  numerical_accuracy: NumericalAccuracyItem[];
+  logical_strengths: import("@fii/shared/schemas").CitedClaim[];
+  logical_weaknesses: import("@fii/shared/schemas").CitedClaim[];
+  unstated_assumptions: import("@fii/shared/schemas").CitedClaim[];
+  bias_indicators: BiasIndicator[];
+  gaps_in_analysis: import("@fii/shared/schemas").CitedClaim[];
+  reliability_rating: ReliabilityRating;
+  reliability_rationale: string;
+  one_line_verdict: string;
+  cost_usd: number;
+}
+
+export interface CritiqueRow {
+  critique_id: string;
+  symbol: string;
+  report_filename: string;
+  report_source: string | null;
+  pdf_hash: string;
+  status:
+    | "pending"
+    | "running"
+    | "ok"
+    | "error"
+    | "ticker_not_found"
+    | "extract_invalid"
+    | "critique_invalid"
+    | string;
+  cost_usd: number;
+  tokens_in: number;
+  tokens_out: number;
+  duration_ms: number;
+  model_used: string | null;
+  created_at: string;
+  completed_at: string | null;
+  extracted_claims: ExtractedReportClaims | null;
+  critique: ReportCritiqueDoc | null;
+  one_line_verdict: string | null;
+  reliability_rating: ReliabilityRating | null;
+}
+
+export interface UploadCritiqueResponse {
+  critique_id: string;
+  status: string;
+  deduped: boolean;
+}
+
 export interface DailySpendPoint {
   date: string;
   total_usd: number;

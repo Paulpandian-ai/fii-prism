@@ -130,6 +130,9 @@ _DEFAULT_COST_CAP_USD: Mapping[str, float] = {
     "technical": 0.25,
     "insider": 0.25,
     "risk": 0.25,
+    # Report critic is a two-call workflow: ~$0.50 for PDF claim extraction +
+    # ~$0.40 for the critique itself = $0.90 total. Override via FII_COST_CAP_REPORT_CRITIC.
+    "report_critic": 0.90,
 }
 
 

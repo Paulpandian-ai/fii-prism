@@ -35,7 +35,7 @@ from sqlalchemy import (
 from sqlalchemy import (
     Enum as PgEnum,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, BYTEA, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from fii_db.enums import (
@@ -601,6 +601,55 @@ class SpecialistCache(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     last_input_hash: Mapped[str | None] = mapped_column(String(64))
+
+
+class ReportCritique(Base):
+    """Uploaded analyst PDF + its structured critique.
+
+    The PDF lives inline in `pdf_bytes` (BYTEA) — uploads are capped at 25MB
+    on the API side so the table doesn't sprawl. `pdf_hash` is a sha256 of the
+    raw bytes and is UNIQUE so an identical re-upload returns the same critique
+    rather than triggering a redundant Claude call.
+
+    Workflow:
+      1. POST /critiques/upload  → row created with status='pending'
+      2. POST /critiques/{id}/run → claim extraction + critique, status='ok'
+
+    `extracted_claims_json` mirrors the ExtractedReportClaims pydantic shape;
+    `critique_json` mirrors ReportCritique. Both are nullable while pending.
+    """
+
+    __tablename__ = "report_critiques"
+
+    critique_id: Mapped[str] = _uuid_pk()
+    symbol: Mapped[str] = mapped_column(
+        String(10), ForeignKey("tickers.symbol", ondelete="CASCADE"), nullable=False
+    )
+    report_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    report_source: Mapped[str | None] = mapped_column(String(64))
+    pdf_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    pdf_bytes: Mapped[bytes] = mapped_column(BYTEA, nullable=False)
+
+    extracted_claims_json: Mapped[dict | None] = mapped_column(JSONB)
+    critique_json: Mapped[dict | None] = mapped_column(JSONB)
+
+    # 'pending' | 'running' | 'ok' | 'error' | 'ticker_not_found'.
+    status: Mapped[str] = mapped_column(String(24), nullable=False, server_default="pending")
+
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False, server_default="0")
+    tokens_in: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    tokens_out: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    model_used: Mapped[str | None] = mapped_column(String(64))
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        Index("ix_report_critiques_symbol_created_at", "symbol", "created_at"),
+    )
 
 
 # --- User domain (single-user MVP; user_id reserved per Section 0) ------------------------
