@@ -83,7 +83,11 @@ class FundamentalsSpecialist:
     # --- Real path: Claude Sonnet tool-use loop -----------------------------------------
 
     async def _run_real(self, ctx: SpecialistContext, model: Model) -> SpecialistResult:
+        from fii_agents.cache_policy import call_cap, cost_cap_usd
+
         start = time.perf_counter()
+        max_calls = call_cap("fundamentals")
+        max_cost = cost_cap_usd("fundamentals")
 
         prompt = load_active_prompt(ctx.factory, SpecialistName.FUNDAMENTALS) or FUNDAMENTALS_V1
 
@@ -113,7 +117,28 @@ class FundamentalsSpecialist:
         cost_usd = 0.0
         last_text = ""
 
-        for _ in range(MAX_ITERATIONS):
+        for _ in range(min(MAX_ITERATIONS, max_calls)):
+            # Per-specialist cost cap (call cap is enforced by the loop bound above).
+            if cost_usd >= max_cost:
+                duration_ms = int((time.perf_counter() - start) * 1000)
+                log.warning(
+                    "specialist_aborted_cap",
+                    specialist="fundamentals",
+                    reason=f"cost_cap_${max_cost:.2f}",
+                    iterations=model_calls,
+                    cost_usd=round(cost_usd, 6),
+                )
+                return SpecialistResult(
+                    output=None,
+                    tokens_in=tokens_in_total,
+                    tokens_out=tokens_out_total,
+                    cost_usd=cost_usd,
+                    model_calls=model_calls,
+                    duration_ms=duration_ms,
+                    error=f"fundamentals_aborted_cap: cost_cap_${max_cost:.2f}",
+                    status="aborted_cap",
+                )
+
             call = await model.respond(
                 system=prompt.text, messages=messages, tools=FUNDAMENTALS_TOOLS
             )

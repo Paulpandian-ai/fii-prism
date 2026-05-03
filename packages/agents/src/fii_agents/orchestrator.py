@@ -140,23 +140,122 @@ async def run_analysis(
     budget: Budget | None = None,
     extra_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Run one analysis to completion (blocking). Used by tests and the API's
-    background task path. For live UX, prefer stream_analysis() below.
+    """Run one analysis end-to-end (blocking). Used by the API's background task
+    path and the advisor's `run_quick` tool.
 
-    `extra_context` is merged into state['context'] by _load_context (e.g.
-    {"use_premium_synthesis": True}).
+    Routes through the new per-specialist + cached pipeline rather than the
+    LangGraph fan-out: each cacheable specialist is run via `run_specialist`
+    (cache-aware — fresh rows are reused), then `synthesize_from_cache` produces
+    the final. For per-node SSE updates, prefer `stream_analysis` below which
+    still uses LangGraph.
+
+    `extra_context` is forwarded onto each specialist's context dict and may
+    carry {"use_premium_synthesis": True, "model_tier": "haiku"}.
     """
-    graph = build_graph(factory, embedder=embedder, raw_bucket=raw_bucket, budget=budget)
-    async with checkpointer_from_url(database_url) as saver:
-        app = graph.compile(checkpointer=saver)
-        initial: AnalysisState = {
+    from fii_data_clients import make_embedder
+    from fii_db import AnalysisType
+
+    from fii_agents.cache_policy import CACHEABLE_SPECIALISTS
+    from fii_agents.specialist_runner import run_specialist
+    from fii_agents.synthesis_runner import MissingSpecialists, synthesize_from_cache
+
+    embedder = embedder or make_embedder()
+    extras = dict(extra_context or {})
+    use_premium = bool(extras.get("use_premium_synthesis", False))
+    model_tier = "haiku" if extras.get("model_tier") == "haiku" else "sonnet"
+    quick_event = extras.get("quick_refresh_event_type")
+    analysis_type = (
+        AnalysisType.QUICK_REFRESH.value if quick_event else AnalysisType.DEEP_DIVE.value
+    )
+
+    # In quick-refresh mode, only the event-scoped specialists need a forced re-run;
+    # off-scope specialists fall back to whatever's already in cache (the deep-dive
+    # baseline). In deep-dive mode, all 8 are run with cache-aware no-force.
+    scope_canonical = _quick_refresh_scope(quick_event) if quick_event else None
+    for name in CACHEABLE_SPECIALISTS:
+        force_this = scope_canonical is not None and name in scope_canonical
+        if scope_canonical is not None and not force_this:
+            # Off-scope in quick-refresh: skip if missing — synthesize_from_cache
+            # will surface the gap. Otherwise reuse the cache row.
+            continue
+        await run_specialist(
+            name,
+            symbol=symbol,
+            factory=factory,
+            embedder=embedder,
+            raw_bucket=raw_bucket,
+            user_id=user_id,
+            analysis_id=analysis_id,
+            context=extras,
+            force=force_this if scope_canonical is not None else False,
+            model_tier=model_tier,
+        )
+
+    try:
+        synth = await synthesize_from_cache(
+            symbol,
+            factory=factory,
+            embedder=embedder,
+            raw_bucket=raw_bucket,
+            user_id=user_id,
+            use_premium=use_premium,
+            analysis_id=analysis_id,
+            analysis_type=analysis_type,
+        )
+    except MissingSpecialists as exc:
+        log.warning(
+            "run_analysis_blocked_specialists_not_ready",
+            analysis_id=analysis_id,
+            symbol=symbol,
+            missing=exc.missing,
+            stale=exc.stale,
+        )
+        return {
             "symbol": symbol,
             "analysis_id": analysis_id,
-            "user_id": user_id,
-            "context": dict(extra_context or {}),
+            "status": "blocked",
+            "missing": exc.missing,
+            "stale": exc.stale,
         }
-        final_state = await app.ainvoke(initial, {"configurable": {"thread_id": analysis_id}})
-    return final_state
+
+    # Re-hydrate the per-specialist outputs into the return dict so callers (and
+    # legacy tests) can still read state.get("fundamentals"), etc., the way the
+    # LangGraph fan-out used to populate them.
+    from fii_db import SpecialistCache
+    from fii_db.session import session_scope
+    from sqlalchemy import select as _select
+
+    from fii_agents.synthesis_runner import _STATE_KEY_FROM_CACHE
+
+    legacy_state: dict[str, Any] = {}
+    with session_scope(factory) as s:
+        rows = (
+            s.execute(_select(SpecialistCache).where(SpecialistCache.symbol == symbol.upper()))
+            .scalars()
+            .all()
+        )
+        for r in rows:
+            key = _STATE_KEY_FROM_CACHE.get(r.specialist_name)
+            if key:
+                legacy_state[key] = r.output_json or {}
+    if synth.bull is not None:
+        legacy_state["bull"] = synth.bull
+    if synth.bear is not None:
+        legacy_state["bear"] = synth.bear
+    if synth.risk_final is not None:
+        legacy_state["risk"] = synth.risk_final
+
+    return {
+        "symbol": synth.symbol,
+        "analysis_id": synth.analysis_id,
+        "status": synth.status,
+        "final": synth.final,
+        "cost_running_total": synth.cost_usd,
+        "tokens_in_total": synth.tokens_in,
+        "tokens_out_total": synth.tokens_out,
+        "timings_ms": {"total": synth.duration_ms},
+        **legacy_state,
+    }
 
 
 async def stream_analysis(
@@ -188,6 +287,25 @@ async def stream_analysis(
         async for event in app.astream(initial, config, stream_mode="updates"):
             for node_name, _ in event.items():
                 yield {"node": node_name, "status": "complete"}
+
+
+# Event-type → canonical-cache-name scope. Mirrors the LangGraph node-name scope
+# in `nodes.py:_QUICK_REFRESH_SCOPE` but uses the short cache identifiers (news /
+# insider / risk) rather than the long node names. `risk` is always in scope so
+# every quick-refresh re-evaluates risk.
+_QUICK_REFRESH_SCOPE_CANONICAL: dict[str, set[str]] = {
+    "price_shock": {"technical", "news", "risk"},
+    "news_shock": {"news", "risk"},
+    "8k_filed": {"fundamentals", "news", "risk"},
+    "earnings_release": {"fundamentals", "valuation", "news", "risk"},
+    "macro_surprise": {"macro", "risk"},
+}
+
+
+def _quick_refresh_scope(event_type: str | None) -> set[str] | None:
+    if not event_type:
+        return None
+    return _QUICK_REFRESH_SCOPE_CANONICAL.get(event_type)
 
 
 def disable_fake_when_key_present() -> None:

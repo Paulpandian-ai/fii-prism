@@ -39,6 +39,10 @@ class SpecialistResult:
     model_calls: int = 0
     duration_ms: int = 0
     error: str | None = None
+    # 'ok' on a clean run, 'aborted_cap' when a per-specialist call/cost cap
+    # short-circuits the loop. The runner persists this onto specialist_cache.status
+    # so synthesis's freshness gate can refuse to use partial work.
+    status: str = "ok"
 
 
 class Specialist(Protocol):

@@ -22,6 +22,7 @@ from fii_shared import (
 from fii_shared.validation import ReprompTicket, try_parse
 
 from fii_agents.budget import estimate_cost_usd
+from fii_agents.cache_policy import synthesis_max_attempts
 from fii_agents.model import MODEL_OPUS, MODEL_SONNET, Model
 from fii_agents.prompts import SYNTHESIS_V1
 
@@ -129,6 +130,7 @@ def _fake_synthesis(state: dict[str, Any], started: float) -> dict[str, Any]:
     )
     return {
         "final": final.model_dump(mode="json"),
+        "synthesis_status": "ok",
         "timings_ms": {"synthesis": int((time.perf_counter() - started) * 1000)},
     }
 
@@ -137,8 +139,10 @@ def _fake_synthesis(state: dict[str, Any], started: float) -> dict[str, Any]:
 
 
 async def _real_synthesis(state: dict[str, Any], model: Model, started: float) -> dict[str, Any]:
-    """One Sonnet/Opus call. We feed the full set of specialist outputs as JSON and let the
-    model produce the OrchestratorFinalOutput. Re-prompted once on schema failure.
+    """Sonnet/Opus call with a hard JSON-validity cap (`synthesis_max_attempts()`,
+    default 3). Each invalid response triggers a reprompt; after the cap we stop
+    spending and return ``status="synthesis_invalid"`` with the best-effort raw text
+    surfaced as a single CitedClaim so the analysis row carries an audit trail.
     """
     priors = {
         name: (obj.model_dump(mode="json") if hasattr(obj, "model_dump") else obj)
@@ -171,19 +175,24 @@ async def _real_synthesis(state: dict[str, Any], model: Model, started: float) -
         f"model_calls: {int(state.get('model_calls_total', 0))}\n"
     )
 
+    max_attempts = synthesis_max_attempts()
     cost_usd = 0.0
     tokens_in = 0
     tokens_out = 0
+    calls = 0
     messages = [{"role": "user", "content": [{"type": "text", "text": user}]}]
     last = ""
-    for _ in range(2):
+    last_ticket: ReprompTicket | None = None
+    for _ in range(max_attempts):
         call = await model.respond(system=SYNTHESIS_V1.text, messages=messages, tools=None)
         cost_usd += estimate_cost_usd(call.model, call.tokens_in, call.tokens_out)
         tokens_in += call.tokens_in
         tokens_out += call.tokens_out
+        calls += 1
         last = call.text or last
         parsed = try_parse(OrchestratorFinalOutput, _extract_json(call.text))
         if isinstance(parsed, ReprompTicket):
+            last_ticket = parsed
             messages.append({"role": "assistant", "content": call.text})
             messages.append({"role": "user", "content": parsed.as_prompt()})
             continue
@@ -191,7 +200,7 @@ async def _real_synthesis(state: dict[str, Any], model: Model, started: float) -
         running = float(state.get("cost_running_total", 0.0)) + cost_usd
         running_in = int(state.get("tokens_in_total", 0)) + tokens_in
         running_out = int(state.get("tokens_out_total", 0)) + tokens_out
-        running_calls = int(state.get("model_calls_total", 0)) + 1
+        running_calls = int(state.get("model_calls_total", 0)) + calls
         parsed = parsed.model_copy(
             update={
                 "cost_summary": CostSummary(
@@ -204,19 +213,103 @@ async def _real_synthesis(state: dict[str, Any], model: Model, started: float) -
         )
         return {
             "final": parsed.model_dump(mode="json"),
+            "synthesis_status": "ok",
             "cost_running_total": cost_usd,
             "tokens_in_total": tokens_in,
             "tokens_out_total": tokens_out,
-            "model_calls_total": 1,
+            "model_calls_total": calls,
             "timings_ms": {"synthesis": int((time.perf_counter() - started) * 1000)},
         }
 
-    # Two failures: fall back to deterministic fake.
+    # Cap exhausted: stop spending. Persist a best-effort placeholder marked
+    # `synthesis_invalid` so the caller (and the API) can surface the failure.
     log.warning(
-        "synthesis_real_failed_falling_back_to_fake",
+        "synthesis_invalid_after_max_attempts",
+        attempts=max_attempts,
         last_text=(last or "")[:300],
+        last_validation_errors=(list(last_ticket.errors) if last_ticket else None),
     )
-    return _fake_synthesis(state, started)
+    placeholder = _invalid_placeholder(state, last, last_ticket)
+    running = float(state.get("cost_running_total", 0.0)) + cost_usd
+    running_in = int(state.get("tokens_in_total", 0)) + tokens_in
+    running_out = int(state.get("tokens_out_total", 0)) + tokens_out
+    running_calls = int(state.get("model_calls_total", 0)) + calls
+    placeholder = placeholder.model_copy(
+        update={
+            "cost_summary": CostSummary(
+                total_usd=running,
+                input_tokens=running_in,
+                output_tokens=running_out,
+                model_calls=running_calls,
+            )
+        }
+    )
+    return {
+        "final": placeholder.model_dump(mode="json"),
+        "synthesis_status": "synthesis_invalid",
+        "cost_running_total": cost_usd,
+        "tokens_in_total": tokens_in,
+        "tokens_out_total": tokens_out,
+        "model_calls_total": calls,
+        "timings_ms": {"synthesis": int((time.perf_counter() - started) * 1000)},
+    }
+
+
+def _invalid_placeholder(
+    state: dict[str, Any], last_text: str, ticket: ReprompTicket | None
+) -> OrchestratorFinalOutput:
+    """Build a minimal valid OrchestratorFinalOutput recording that synthesis
+    failed schema validation N times in a row."""
+    src = SourceRef(
+        source_type=SourceType.CALCULATED,
+        source_id="synthesis/invalid",
+        section=None,
+        retrieved_at=datetime.now(UTC),
+        url=None,
+    )
+    err = (
+        "; ".join(ticket.errors) if ticket and ticket.errors else "model output failed schema validation"
+    )
+    wrong = [
+        CitedClaim(
+            claim=f"Synthesis did not produce valid JSON after the attempt cap: {err}"[:500],
+            sources=[src],
+            confidence="low",
+        ),
+        CitedClaim(
+            claim="The synthesis prompt or upstream specialist outputs may need review.",
+            sources=[src],
+            confidence="low",
+        ),
+        CitedClaim(
+            claim="Re-run synthesis after addressing the validation error before acting on this analysis.",
+            sources=[src],
+            confidence="low",
+        ),
+    ]
+    return OrchestratorFinalOutput(
+        symbol=state["symbol"].upper(),
+        analysis_id=state["analysis_id"],
+        recommendation="hold",
+        confidence="low",
+        fii_score=5.0,
+        thesis=(
+            f"{state['symbol'].upper()} synthesis was unable to produce a valid "
+            "OrchestratorFinalOutput within the attempt cap; re-run required. "
+            f"Last raw output (truncated): {(last_text or '')[:240]}"
+        ),
+        what_i_would_buy=None,
+        what_could_make_me_wrong=wrong,
+        time_horizon="long (years)",
+        specialist_summaries={},
+        stress_outcomes={},
+        cost_summary=CostSummary(
+            total_usd=float(state.get("cost_running_total", 0.0)),
+            input_tokens=int(state.get("tokens_in_total", 0)),
+            output_tokens=int(state.get("tokens_out_total", 0)),
+            model_calls=int(state.get("model_calls_total", 0)),
+        ),
+    )
 
 
 # --- Helpers ------------------------------------------------------------------------------

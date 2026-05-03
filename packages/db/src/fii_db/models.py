@@ -563,6 +563,46 @@ class AnalysisOutcome(Base):
     analysis: Mapped[Analysis] = relationship(back_populates="outcome")
 
 
+# --- Specialist cache (Phase 1: per-symbol cached specialist outputs) ---------------------
+
+
+class SpecialistCache(Base):
+    """One row per (symbol, specialist) holding the latest cached output.
+
+    Distinct from `analysis_specialist_outputs`, which snapshots specialist outputs
+    INTO a specific analysis_id at synthesis time. This table is the *source of truth*
+    for "what's the most recent fundamentals/macro/etc. for AAPL" and is keyed only on
+    (symbol, specialist) so there's exactly one cached output per pair.
+
+    Freshness is gated by a per-specialist TTL (see fii_agents.cache_policy).
+    `status` distinguishes a fresh successful run ('ok') from a cap-aborted one
+    ('aborted_cap') so synthesis can refuse to proceed on a partial cache.
+    """
+
+    __tablename__ = "specialist_cache"
+
+    symbol: Mapped[str] = mapped_column(
+        String(10), ForeignKey("tickers.symbol", ondelete="CASCADE"), primary_key=True
+    )
+    specialist_name: Mapped[str] = mapped_column(String(32), primary_key=True)
+
+    output_json: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
+    reasoning_text: Mapped[str | None] = mapped_column(Text)
+    citations_json: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
+
+    model_used: Mapped[str | None] = mapped_column(String(32))
+    tokens_in: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    tokens_out: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False, server_default="0")
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, server_default="ok")
+
+    last_run_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_input_hash: Mapped[str | None] = mapped_column(String(64))
+
+
 # --- User domain (single-user MVP; user_id reserved per Section 0) ------------------------
 
 # UUID NIL used as the single-user sentinel until Cognito multi-tenancy lands.

@@ -43,6 +43,12 @@ class LoopParams:
     output_schema: type[BaseModel]
     max_iterations: int = 20
     tool_choice: dict[str, Any] | None = None
+    # Per-specialist hard caps. None disables the cap. The loop checks BEFORE each
+    # model.respond() call: if either cap is at-or-over the limit, it stops and
+    # returns a SpecialistResult with status="aborted_cap" preserving whatever
+    # tokens/cost/calls we'd accumulated.
+    max_calls: int | None = None
+    max_cost_usd: float | None = None
 
 
 def _extract_json(text: str) -> str:
@@ -64,6 +70,17 @@ async def run_tool_loop(model: Model, p: LoopParams) -> SpecialistResult:
             "run_tool_loop called in fake mode; specialists should branch on model.is_fake."
         )
 
+    # Backfill per-specialist caps from cache_policy if the caller didn't set them.
+    # This wires the 25-call / $0.30 default caps to every specialist that uses
+    # run_tool_loop without each one having to import cache_policy explicitly.
+    if p.max_calls is None or p.max_cost_usd is None:
+        from fii_agents.cache_policy import call_cap, cost_cap_usd
+
+        if p.max_calls is None:
+            p.max_calls = call_cap(p.name)
+        if p.max_cost_usd is None:
+            p.max_cost_usd = cost_cap_usd(p.name)
+
     started = time.perf_counter()
     messages: list[dict[str, Any]] = [
         {"role": "user", "content": [{"type": "text", "text": p.user_message}]}
@@ -75,6 +92,31 @@ async def run_tool_loop(model: Model, p: LoopParams) -> SpecialistResult:
     last_text = ""
 
     for _ in range(p.max_iterations):
+        # Per-specialist hard caps. Checked BEFORE the next call so we never blow
+        # past the limit by 1 call / by the cost of one extra invocation.
+        if p.max_calls is not None and model_calls >= p.max_calls:
+            return _aborted_cap(
+                p.name,
+                started,
+                tokens_in_total,
+                tokens_out_total,
+                cost_usd,
+                model_calls,
+                last_text,
+                reason=f"call_cap_{p.max_calls}",
+            )
+        if p.max_cost_usd is not None and cost_usd >= p.max_cost_usd:
+            return _aborted_cap(
+                p.name,
+                started,
+                tokens_in_total,
+                tokens_out_total,
+                cost_usd,
+                model_calls,
+                last_text,
+                reason=f"cost_cap_${p.max_cost_usd:.2f}",
+            )
+
         call = await model.respond(
             system=p.system_prompt, messages=messages, tools=p.tools, tool_choice=p.tool_choice
         )
@@ -150,4 +192,35 @@ async def run_tool_loop(model: Model, p: LoopParams) -> SpecialistResult:
             f"{p.name}_max_iterations_exceeded ({p.max_iterations}); "
             f"last assistant text: {last_text[:300]}"
         ),
+    )
+
+
+def _aborted_cap(
+    name: str,
+    started: float,
+    tokens_in: int,
+    tokens_out: int,
+    cost_usd: float,
+    model_calls: int,
+    last_text: str,
+    *,
+    reason: str,
+) -> SpecialistResult:
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    log.warning(
+        "specialist_aborted_cap",
+        specialist=name,
+        reason=reason,
+        iterations=model_calls,
+        cost_usd=round(cost_usd, 6),
+    )
+    return SpecialistResult(
+        output=None,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+        cost_usd=cost_usd,
+        model_calls=model_calls,
+        duration_ms=duration_ms,
+        error=f"{name}_aborted_cap: {reason}; last text: {last_text[:200]}",
+        status="aborted_cap",
     )

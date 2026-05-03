@@ -35,6 +35,7 @@ from app.routes.chat import router as chat_router  # noqa: E402
 from app.routes.events import router as events_router  # noqa: E402
 from app.routes.health import router as health_router  # noqa: E402
 from app.routes.journal import router as journal_router  # noqa: E402
+from app.routes.stocks import router as stocks_router  # noqa: E402
 from app.routes.watchlist import router as watchlist_router  # noqa: E402
 
 _settings = get_settings()
@@ -126,6 +127,7 @@ app.add_middleware(CorrelationIdMiddleware)
 
 app.include_router(health_router)
 app.include_router(analyses_router)
+app.include_router(stocks_router)
 app.include_router(watchlist_router)
 app.include_router(events_router)
 app.include_router(chat_router)
