@@ -175,6 +175,20 @@ export interface CostCapStatus {
   midnight_resets_at: string;
 }
 
+export interface DailySpendPoint {
+  date: string;
+  total_usd: number;
+  specialist_usd: number;
+  synthesis_usd: number;
+}
+
+export interface TotalSpendSummary {
+  last_24h_usd: number;
+  last_7d_usd: number;
+  all_time_usd: number;
+  daily_14d: DailySpendPoint[];
+}
+
 // --- SSE event shape ----------------------------------------------------------------------
 
 export interface NodeEvent {

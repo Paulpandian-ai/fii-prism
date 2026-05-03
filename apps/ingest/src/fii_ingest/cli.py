@@ -169,22 +169,29 @@ def filings_cmd(
 def macro_cmd() -> None:
     from fii_data_clients import FredClient
     from fii_db import get_engine, get_session_factory
-    from fii_db.session import session_scope
 
-    from fii_ingest.jobs.macro import ingest_all_default
+    from fii_ingest.jobs.macro import MacroIngestReport, ingest_all_default
 
     settings = get_settings()
     if not settings.fred_api_key:
         raise typer.BadParameter("FRED_API_KEY not set")
 
-    async def _run() -> int:
+    async def _run() -> MacroIngestReport:
         engine = get_engine(settings.database_url or "")
         factory = get_session_factory(engine)
         async with FredClient(api_key=settings.fred_api_key) as fred:
-            with session_scope(factory) as s:
-                return await ingest_all_default(s, fred=fred)
+            return await ingest_all_default(factory, fred=fred)
 
-    console.print(f"[cyan]Ingested {asyncio.run(_run())} macro observations[/cyan]")
+    macro_report = asyncio.run(_run())
+    console.print(
+        f"[cyan]Ingested {macro_report.total_rows} macro observations[/cyan]"
+    )
+    if macro_report.failed:
+        console.print(
+            f"[yellow]Skipped {len(macro_report.failed)} series due to errors:[/yellow]"
+        )
+        for series_id, err in macro_report.failed:
+            console.print(f"  [yellow]- {series_id}: {err}[/yellow]")
 
 
 @app.command("news")

@@ -181,9 +181,13 @@ async def seed_ticker(
         if settings.fred_api_key:
             try:
                 async with FredClient(api_key=settings.fred_api_key) as fred:
-                    with session_scope(factory) as s:
-                        report.macro_rows = await ingest_all_default(s, fred=fred)
+                    macro_report = await ingest_all_default(factory, fred=fred)
+                report.macro_rows = macro_report.total_rows
+                for series_id, err in macro_report.failed:
+                    report.errors.append(f"fred:{series_id}: {err}")
             except Exception as exc:
+                # Only the orchestrator-level path (e.g., FredClient setup) reaches
+                # here now — per-series failures are handled inside ingest_all_default.
                 report.errors.append(f"fred: {exc}")
                 log.exception("fred_step_failed")
         else:

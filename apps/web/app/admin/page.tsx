@@ -16,7 +16,12 @@ import {
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Disclaimer } from "@/components/chrome/disclaimer";
-import { useAdminStats, useCircuitBreakers, useCostCap } from "@/lib/api";
+import {
+  useAdminStats,
+  useAdminTotalSpend,
+  useCircuitBreakers,
+  useCostCap,
+} from "@/lib/api";
 
 const STATE_COLOR: Record<string, string> = {
   closed: "#16a34a",
@@ -28,13 +33,81 @@ export default function AdminPage() {
   const stats = useAdminStats();
   const breakers = useCircuitBreakers();
   const cap = useCostCap();
+  const spend = useAdminTotalSpend();
 
   const daily = stats.data?.daily_volume ?? [];
   const specHealth = stats.data?.specialist_health ?? [];
   const tokens = stats.data?.token_usage ?? [];
+  const dailySpend14d = spend.data?.daily_14d ?? [];
 
   return (
     <main className="mx-auto max-w-6xl space-y-6 px-6 py-8">
+      {/* Anthropic spend across analyses + specialist_cache. Phase 1 split spend
+          across two tables; this tile reads both via /admin/total-spend. */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Total Anthropic spend</CardTitle>
+          <CardDescription>
+            Combined across analyses (synthesis runs) and specialist_cache (per-specialist runs).
+            Auto-refreshes every 30s.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <Stat
+              label="Last 24 hours"
+              value={spend.data ? `$${spend.data.last_24h_usd.toFixed(4)}` : "—"}
+            />
+            <Stat
+              label="Last 7 days"
+              value={spend.data ? `$${spend.data.last_7d_usd.toFixed(4)}` : "—"}
+            />
+            <Stat
+              label="All time"
+              value={spend.data ? `$${spend.data.all_time_usd.toFixed(2)}` : "—"}
+            />
+          </div>
+          <div style={{ height: 220 }}>
+            {dailySpend14d.length === 0 ? (
+              <div className="flex h-full items-center justify-center rounded-md border border-dashed border-fii-navy-100 text-sm text-fii-mute">
+                No spend recorded yet.
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={dailySpend14d}
+                  margin={{ top: 10, right: 16, left: -12, bottom: 0 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e6eaf2" />
+                  <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                  <YAxis
+                    tick={{ fontSize: 11 }}
+                    tickFormatter={(v) => `$${Number(v).toFixed(2)}`}
+                  />
+                  <Tooltip
+                    formatter={(value: number) => `$${value.toFixed(4)}`}
+                    labelStyle={{ color: "#0c1f4d" }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Bar
+                    dataKey="specialist_usd"
+                    name="Specialists"
+                    stackId="cost"
+                    fill="#1d4ed8"
+                  />
+                  <Bar
+                    dataKey="synthesis_usd"
+                    name="Synthesis"
+                    stackId="cost"
+                    fill="#7c3aed"
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle>Admin · observability</CardTitle>

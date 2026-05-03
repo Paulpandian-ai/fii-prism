@@ -33,6 +33,7 @@ import type {
   SynthesizeBlockedDetail,
   SynthesizeResponse,
   TotalSpendResponse,
+  TotalSpendSummary,
   WatchlistEntry,
 } from "./types";
 
@@ -308,6 +309,18 @@ export function getCircuitBreakers() {
 
 export function getCostCap() {
   return apiFetch<CostCapStatus>("/admin/cost-cap");
+}
+
+export function getAdminTotalSpend() {
+  return apiFetch<TotalSpendSummary>("/admin/total-spend");
+}
+
+export function useAdminTotalSpend() {
+  return useQuery({
+    queryKey: ["admin-total-spend"],
+    queryFn: getAdminTotalSpend,
+    refetchInterval: 30_000,
+  });
 }
 
 export function useAdminStats() {

@@ -66,7 +66,9 @@ DEFAULT_MACRO_SERIES: tuple[str, ...] = (
     "T10Y2Y",
     "VIXCLS",
     "DCOILWTICO",
-    "GOLDAMGBD228NLBM",
+    # GOLDAMGBD228NLBM (London AM fix) was discontinued by FRED — returns HTTP
+    # 400 on lookup. Use the still-active PM fix (GOLDPMGBD228NLBM) instead.
+    "GOLDPMGBD228NLBM",
     "DEXUSEU",
     "DEXCHUS",
     "USRECD",

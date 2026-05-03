@@ -20,7 +20,9 @@ export const SPECIALIST_COST_CAP_USD: Record<SpecialistName, number> = {
   moat: 0.4,
   macro: 0.25,
   technical: 0.25,
-  news: 0.25,
+  // Bumped to 0.35 — News routinely emits 11K+ output tokens producing
+  // CitedClaim arrays for themes + anomalies. See cache_policy.py.
+  news: 0.35,
   insider: 0.25,
   risk: 0.25,
 };

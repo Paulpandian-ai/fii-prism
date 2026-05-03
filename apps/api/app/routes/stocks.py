@@ -49,7 +49,7 @@ class CachedSpecialistView(BaseModel):
     cost_usd: float
     has_output: bool
     # Full cached payload included so the "View output" modal in the UI doesn't
-    # need a second round-trip. Total payload at 8 specialists × ~5KB ≈ 40KB
+    # need a second round-trip. Total payload at 8 specialists * ~5KB ~= 40KB
     # which is fine; if it grows we can introduce a per-specialist GET endpoint.
     output: dict[str, Any] | None = None
 

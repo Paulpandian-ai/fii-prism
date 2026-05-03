@@ -120,7 +120,12 @@ _DEFAULT_COST_CAP_USD: Mapping[str, float] = {
     "moat": 0.40,
     "valuation": 0.40,
     "synthesis": 0.40,
-    "news": 0.25,
+    # News reads up to 30 deduplicated articles per call and routinely produces
+    # 11K+ output tokens emitting top_positive_themes / top_negative_themes /
+    # anomaly_flags as CitedClaims. Mid-array truncation at $0.25 was a real
+    # cap-too-tight failure, not runaway behavior — bumped to $0.35 with the
+    # data-efficiency caps already in place from the prior change.
+    "news": 0.35,
     "macro": 0.25,
     "technical": 0.25,
     "insider": 0.25,

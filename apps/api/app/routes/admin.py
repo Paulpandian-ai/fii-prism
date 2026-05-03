@@ -13,10 +13,10 @@ from typing import Any
 import structlog
 from fastapi import APIRouter, Depends
 from fii_data_clients import BaseHttpClient
-from fii_db import Analysis, AnalysisSpecialistOutput
+from fii_db import Analysis, AnalysisSpecialistOutput, SpecialistCache
 from fii_db.session import session_scope
 from pydantic import BaseModel
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, literal, select, union_all
 
 from app.agents_runtime import AgentsRuntime, get_runtime
 from app.cost_gate import cap_status
@@ -62,6 +62,20 @@ class CircuitSnapshot(BaseModel):
     state: str
     consecutive_failures: int
     cooldown_remaining_s: float
+
+
+class DailySpendPoint(BaseModel):
+    date: str
+    total_usd: float
+    specialist_usd: float
+    synthesis_usd: float
+
+
+class TotalSpendSummary(BaseModel):
+    last_24h_usd: float
+    last_7d_usd: float
+    all_time_usd: float
+    daily_14d: list[DailySpendPoint]
 
 
 # --- Routes -------------------------------------------------------------------------------
@@ -139,6 +153,86 @@ async def get_stats(runtime: AgentsRuntime = Depends(get_runtime)) -> AdminStats
         daily_volume=daily,
         specialist_health=spec_health,
         token_usage=token_usage,
+    )
+
+
+@router.get("/total-spend", response_model=TotalSpendSummary)
+async def get_total_spend(runtime: AgentsRuntime = Depends(get_runtime)) -> TotalSpendSummary:
+    """Total Anthropic spend across both `analyses.total_cost_usd` (synthesis +
+    legacy deep-dive runs) and `specialist_cache.cost_usd` (Phase 1 per-specialist
+    runs). Single round-trip: a UNION ALL feeds three windowed aggregates plus a
+    daily-grouped 14-day series.
+    """
+    now = datetime.now(UTC)
+    cutoff_24h = now - timedelta(hours=24)
+    cutoff_7d = now - timedelta(days=7)
+    cutoff_14d_date = (now - timedelta(days=14)).date()
+
+    # Build one virtual table with (occurred_at, source, cost_usd) so a single
+    # query can compute every aggregate. `source` is kept for the daily breakdown.
+    spec_rows = select(
+        SpecialistCache.last_run_at.label("occurred_at"),
+        literal("specialist").label("source"),
+        SpecialistCache.cost_usd.label("cost_usd"),
+    )
+    analysis_rows = select(
+        Analysis.completed_at.label("occurred_at"),
+        literal("synthesis").label("source"),
+        Analysis.total_cost_usd.label("cost_usd"),
+    ).where(Analysis.completed_at.is_not(None))
+
+    combined = union_all(spec_rows, analysis_rows).subquery()
+
+    with session_scope(runtime.session_factory) as s:
+        last_24h = s.execute(
+            select(func.coalesce(func.sum(combined.c.cost_usd), 0.0)).where(
+                combined.c.occurred_at >= cutoff_24h
+            )
+        ).scalar_one()
+        last_7d = s.execute(
+            select(func.coalesce(func.sum(combined.c.cost_usd), 0.0)).where(
+                combined.c.occurred_at >= cutoff_7d
+            )
+        ).scalar_one()
+        all_time = s.execute(
+            select(func.coalesce(func.sum(combined.c.cost_usd), 0.0))
+        ).scalar_one()
+
+        # Daily breakdown for the last 14 days, split by source so the chart can
+        # stack specialist vs synthesis if useful.
+        date_col = func.date(combined.c.occurred_at).label("d")
+        daily_rows = s.execute(
+            select(
+                date_col,
+                combined.c.source,
+                func.coalesce(func.sum(combined.c.cost_usd), 0.0),
+            )
+            .where(func.date(combined.c.occurred_at) >= cutoff_14d_date)
+            .group_by(date_col, combined.c.source)
+            .order_by(date_col)
+        ).all()
+
+    # Pivot daily_rows ([date, source, cost]) into one DailySpendPoint per date.
+    by_date: dict[str, dict[str, float]] = {}
+    for d, src, cost in daily_rows:
+        key = str(d)
+        bucket = by_date.setdefault(key, {"specialist": 0.0, "synthesis": 0.0})
+        bucket[str(src)] = float(cost or 0.0)
+    daily_14d = [
+        DailySpendPoint(
+            date=k,
+            total_usd=v["specialist"] + v["synthesis"],
+            specialist_usd=v["specialist"],
+            synthesis_usd=v["synthesis"],
+        )
+        for k, v in sorted(by_date.items())
+    ]
+
+    return TotalSpendSummary(
+        last_24h_usd=float(last_24h or 0.0),
+        last_7d_usd=float(last_7d or 0.0),
+        all_time_usd=float(all_time or 0.0),
+        daily_14d=daily_14d,
     )
 
 

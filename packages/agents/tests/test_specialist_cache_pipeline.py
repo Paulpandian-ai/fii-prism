@@ -16,6 +16,7 @@ Three scenarios are covered here:
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -392,7 +393,9 @@ async def test_fundamentals_default_cap_is_60_cents_and_normal_run_completes_wit
     assert cost_cap_usd("moat") == 0.40
     assert cost_cap_usd("valuation") == 0.40
     assert cost_cap_usd("synthesis") == 0.40
-    for q in ("news", "macro", "technical", "insider", "risk"):
+    # News has its own intermediate tier (raised from 0.25 to 0.35).
+    assert cost_cap_usd("news") == 0.35
+    for q in ("macro", "technical", "insider", "risk"):
         assert cost_cap_usd(q) == 0.25, q
     # The mapping is exhaustive — no specialist falls back to the global default.
     assert set(_DEFAULT_COST_CAP_USD).issuperset(
@@ -678,6 +681,146 @@ async def test_news_specialist_completes_within_cost_cap_with_30_articles(
         f"news cost ${result.cost_usd:.4f} must be < cap ${cost_cap_usd('news'):.2f}"
     )
     assert result.model_calls == 2
+
+    with session_scope(session_factory) as s:
+        s.execute(delete(NewsItem).where(NewsItem.symbols.contains([sym])))
+
+
+# --- 8b. News realistic-volume run finishes within the new $0.35 cap -------------------
+
+
+@pytest.mark.asyncio
+async def test_news_specialist_completes_within_035_cap_with_realistic_token_volume(
+    session_factory, monkeypatch
+):
+    """A real News run that emits the full top_positive_themes / top_negative_themes /
+    anomaly_flags arrays burns ~11K output tokens (we observed 11.5K mid-array
+    truncation hitting the old $0.25 cap). With the cap raised to $0.35 the same
+    profile must complete cleanly. At Sonnet rates that's ~$0.18 — well under the
+    new cap, so cap headroom is comfortable.
+    """
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+
+    from fii_agents.cache_policy import cost_cap_usd
+    from fii_agents.model import MODEL_SONNET, ModelCall
+    from fii_agents.specialists.base import SpecialistContext
+    from fii_agents.specialists.news import NewsSentimentSpecialist
+    from fii_db import NewsItem
+
+    sym = "TSTNEWS3"
+    monkeypatch.delenv("FII_USE_FAKE_MODEL", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-no-real-call")
+
+    with session_scope(session_factory) as s:
+        s.execute(delete(NewsItem).where(NewsItem.symbols.contains([sym])))
+        for i in range(30):
+            s.add(
+                NewsItem(
+                    content_hash=f"hash_{sym}_{i:04d}",
+                    symbols=[sym],
+                    headline=f"Realistic article {i}: management commentary on margin trajectory",
+                    summary=(
+                        "Lengthy summary text representative of a real Finnhub article; "
+                        "covers the quarter's results, guidance language, sell-side framing."
+                    ),
+                    url=f"https://example.com/{sym}/{i}",
+                    source="finnhub",
+                    published_at=_dt(2026, 5, 1 + i, 9, 0, tzinfo=_UTC),
+                )
+            )
+        _seed_ticker(session_factory, sym)
+
+    # Build a valid full-volume NewsSentimentOutput with the array fields populated
+    # at the prompt-cap counts (3 positive themes, 3 negative themes, 5 anomaly flags).
+    src = {
+        "source_type": "finnhub_news",
+        "source_id": "finnhub/news/example",
+        "section": None,
+        "retrieved_at": "2026-05-15T09:00:00Z",
+        "url": None,
+    }
+
+    def claim(text: str) -> dict:
+        return {"claim": text, "confidence": "medium", "sources": [src]}
+
+    full_output = {
+        "net_sentiment": -0.08,
+        "articles_analyzed": 30,
+        "top_positive_themes": [claim("Positive theme 1"), claim("Positive theme 2"), claim("Positive theme 3")],
+        "top_negative_themes": [claim("Negative theme 1"), claim("Negative theme 2"), claim("Negative theme 3")],
+        "anomaly_flags": [claim(f"Anomaly {i}") for i in range(1, 6)],
+        "earnings_guidance_changes": [],
+        "qualitative_summary": "Sentiment slightly negative on guidance language; 30 articles inspected.",
+        "confidence": "medium",
+    }
+    valid_json = json.dumps(full_output)
+
+    # Token counts taken from the real failed run that motivated the cap raise:
+    # 11.5K output + ~27.5K input = $0.255, exactly at/over the old cap.
+    turns = [
+        ModelCall(
+            text="Reading recent news.",
+            tool_calls=[
+                {
+                    "id": "n1",
+                    "name": "get_recent_news",
+                    "input": {"symbol": sym, "since_days": 30, "limit": 30},
+                }
+            ],
+            stop_reason="tool_use",
+            tokens_in=1200,
+            tokens_out=200,
+            model=MODEL_SONNET,
+        ),
+        ModelCall(
+            text=valid_json,
+            tokens_in=27_500,
+            tokens_out=11_500,
+            tool_calls=[],
+            stop_reason="end_turn",
+            model=MODEL_SONNET,
+        ),
+    ]
+
+    class _ScriptedModel:
+        model_id = MODEL_SONNET
+        is_fake = False
+
+        def __init__(self) -> None:
+            self._i = 0
+
+        async def respond(self, *, system, messages, tools=None, tool_choice=None):
+            r = turns[self._i]
+            self._i += 1
+            return r
+
+    ctx = SpecialistContext(
+        symbol=sym,
+        analysis_id="00000000-0000-0000-0000-000000000000",
+        user_id="00000000-0000-0000-0000-000000000000",
+        factory=session_factory,
+        embedder=_Embedder(),
+        raw_bucket=None,
+    )
+    result = await NewsSentimentSpecialist().run(ctx, _ScriptedModel())
+
+    assert result.status == "ok", f"expected ok, got {result.status}: {result.error}"
+    assert result.output is not None
+    # The exact same volume that hit the old $0.25 cap mid-array now passes.
+    assert cost_cap_usd("news") == 0.35
+    assert result.cost_usd < 0.35, (
+        f"News cost ${result.cost_usd:.4f} must be < new $0.35 cap"
+    )
+    # Cost should also exceed the old cap so this test would fail under the prior limit —
+    # i.e. the cap raise is what makes this realistic profile finish.
+    assert result.cost_usd > 0.25, (
+        f"News cost ${result.cost_usd:.4f} must exceed the old $0.25 cap to prove the bump matters"
+    )
+    assert result.output.articles_analyzed == 30
+    assert len(result.output.top_positive_themes) == 3
+    assert len(result.output.top_negative_themes) == 3
+    assert len(result.output.anomaly_flags) == 5
 
     with session_scope(session_factory) as s:
         s.execute(delete(NewsItem).where(NewsItem.symbols.contains([sym])))
