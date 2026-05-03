@@ -16,6 +16,8 @@ from fii_db import FundamentalsQuarterly, StatementType
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from fii_ingest.bulk import chunked_upsert
+
 log = structlog.get_logger(__name__)
 
 
@@ -142,21 +144,28 @@ async def ingest_fundamentals(session: Session, *, fmp: FMPClient, symbol: str) 
                 statement=stmt_type.value,
             )
             continue
-        try:
-            stmt = pg_insert(FundamentalsQuarterly).values(rows)
-            stmt = stmt.on_conflict_do_update(
+        update_cols = [
+            c for c in rows[0] if c not in ("symbol", "fiscal_period_end", "statement_type")
+        ]
+
+        def _build(chunk: list[dict[str, Any]], _cols: list[str] = update_cols):
+            stmt = pg_insert(FundamentalsQuarterly).values(chunk)
+            return stmt.on_conflict_do_update(
                 index_elements=[
                     FundamentalsQuarterly.symbol,
                     FundamentalsQuarterly.fiscal_period_end,
                     FundamentalsQuarterly.statement_type,
                 ],
-                set_={
-                    col: getattr(stmt.excluded, col)
-                    for col in rows[0]
-                    if col not in ("symbol", "fiscal_period_end", "statement_type")
-                },
+                set_={col: getattr(stmt.excluded, col) for col in _cols},
             )
-            session.execute(stmt)
+
+        try:
+            chunked_upsert(
+                session,
+                rows,
+                build_stmt=_build,
+                label=f"fundamentals_quarterly:{symbol}:{stmt_type.value}",
+            )
         except Exception:
             log.exception("fundamentals_upsert_failed", symbol=symbol, statement=stmt_type.value)
             continue
