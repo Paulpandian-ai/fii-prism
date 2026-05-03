@@ -54,3 +54,49 @@ def estimate_cost_usd(model: str, tokens_in: int, tokens_out: int) -> float:
         pricing = MODEL_PRICING_PER_MTOKEN["claude-sonnet-4-6"]
     in_rate, out_rate = pricing
     return (tokens_in / 1_000_000) * in_rate + (tokens_out / 1_000_000) * out_rate
+
+
+# --- Pre-flight token estimation -----------------------------------------------------------
+
+# Rough character→token ratio. Anthropic's tokenizer is BPE so 1 token ≈ 3.5-4
+# characters of English text; we use 4 to err on the side of *under*-estimating
+# tokens (i.e., we're pessimistic about cost — a real run that fits under 60%
+# of the cap by this estimate has comfortable headroom).
+_APPROX_CHARS_PER_TOKEN = 4
+
+
+def _block_chars(block: object) -> int:
+    if isinstance(block, str):
+        return len(block)
+    if not isinstance(block, dict):
+        return 0
+    if "text" in block:
+        return len(block.get("text") or "")
+    if "content" in block:
+        c = block.get("content")
+        if isinstance(c, str):
+            return len(c)
+        if isinstance(c, list):
+            return sum(_block_chars(b) for b in c)
+    if "input" in block:
+        # tool_use input is JSON-serialized inside the API request.
+        import json as _json
+
+        return len(_json.dumps(block.get("input") or {}, default=str))
+    return 0
+
+
+def estimate_input_tokens(messages: list[dict], system: str | None = None) -> int:
+    """Crude pre-flight estimate of how many input tokens the next API call
+    will consume. Walks the assistant/user content blocks the same way the SDK
+    serializes them to wire format (text + tool_use input + tool_result content).
+    """
+    total_chars = len(system or "")
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, str):
+            total_chars += len(content)
+        elif isinstance(content, list):
+            for block in content:
+                total_chars += _block_chars(block)
+    return total_chars // _APPROX_CHARS_PER_TOKEN

@@ -26,6 +26,13 @@ log = structlog.get_logger(__name__)
 UNTRUSTED_NEWS_OPEN = "<untrusted_news_content>"
 UNTRUSTED_NEWS_CLOSE = "</untrusted_news_content>"
 
+# Hard cap on articles returned to the LLM in a single tool response. The model
+# can ask for more via the `limit` arg but the server enforces this ceiling so
+# we never blow past the per-specialist cost cap on input tokens alone. ~30
+# articles at ~500 tokens each ≈ 15K input tokens, comfortably within News'
+# $0.25 cost cap.
+MAX_NEWS_ARTICLES_PER_RESPONSE = 30
+
 
 @dataclass
 class NewsToolContext:
@@ -47,7 +54,7 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "symbol": {"type": "string"},
                 "since_days": {"type": "integer", "minimum": 1, "maximum": 365, "default": 30},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 30},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 30, "default": 30},
             },
             "required": ["symbol"],
         },
@@ -135,7 +142,15 @@ def wrap_untrusted(text: str | None) -> str:
 def _get_recent_news(
     ctx: NewsToolContext, symbol: str, since_days: int, limit: int
 ) -> dict[str, Any]:
+    # Server-side hard cap. NewsItem.content_hash is already UNIQUE in the DB so
+    # exact-duplicate articles can't be inserted, but ingestion can produce
+    # near-duplicates from cross-syndicated wires (same body, different
+    # headline). We dedupe on content_hash here as defense-in-depth before
+    # paying input tokens to send them to the LLM.
+    effective_limit = min(int(limit or MAX_NEWS_ARTICLES_PER_RESPONSE), MAX_NEWS_ARTICLES_PER_RESPONSE)
     cutoff = date.today() - timedelta(days=since_days)
+    # Pull a slightly larger window so dedupe doesn't shrink us below the cap.
+    fetch_n = effective_limit * 2
     with session_scope(ctx.factory) as s:
         rows = (
             s.execute(
@@ -146,26 +161,37 @@ def _get_recent_news(
                     NewsItem.published_at >= cutoff,
                 )
                 .order_by(desc(NewsItem.published_at))
-                .limit(limit)
+                .limit(fetch_n)
             )
             .scalars()
             .all()
         )
-    items = [
-        {
-            "news_id": str(r.news_id),
-            "source": r.source,
-            "url": r.url,
-            "published_at": r.published_at.isoformat() if r.published_at else None,
-            "headline_wrapped": wrap_untrusted(r.headline),
-            "summary_wrapped": wrap_untrusted(r.summary),
-        }
-        for r in rows
-    ]
+
+    seen_hashes: set[str] = set()
+    items: list[dict[str, Any]] = []
+    for r in rows:
+        if r.content_hash in seen_hashes:
+            continue
+        seen_hashes.add(r.content_hash)
+        items.append(
+            {
+                "news_id": str(r.news_id),
+                "source": r.source,
+                "url": r.url,
+                "published_at": r.published_at.isoformat() if r.published_at else None,
+                "headline_wrapped": wrap_untrusted(r.headline),
+                "summary_wrapped": wrap_untrusted(r.summary),
+            }
+        )
+        if len(items) >= effective_limit:
+            break
+
     return {
         "symbol": symbol.upper(),
         "since_days": since_days,
         "count": len(items),
+        "max_returned": MAX_NEWS_ARTICLES_PER_RESPONSE,
+        "deduplicated": True,
         "items": items,
         "wrapping_policy": (
             "All headlines and summaries are inside <untrusted_news_content>...</untrusted_news_content>. "

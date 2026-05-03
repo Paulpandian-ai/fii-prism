@@ -22,9 +22,15 @@ import structlog
 from fii_shared.validation import ReprompTicket, try_parse
 from pydantic import BaseModel
 
-from fii_agents.budget import estimate_cost_usd
+from fii_agents.budget import estimate_cost_usd, estimate_input_tokens
 from fii_agents.model import Model
 from fii_agents.specialists.base import SpecialistResult
+
+# Pre-flight gate: if estimated input cost exceeds this fraction of the
+# specialist's cost cap, abort cleanly with status='input_too_large' BEFORE
+# sending the request. The remaining 40% reserves room for the model's output
+# tokens, which carry the higher per-token rate.
+INPUT_COST_CAP_FRACTION = 0.60
 
 log = structlog.get_logger(__name__)
 
@@ -121,6 +127,26 @@ async def run_tool_loop(model: Model, p: LoopParams) -> SpecialistResult:
                     reason=f"cost_cap_${p.max_cost_usd:.2f}",
                 )
 
+            # Pre-flight cost estimate: refuse to send a request whose input alone
+            # would already exceed INPUT_COST_CAP_FRACTION of the specialist's cap.
+            if p.max_cost_usd is not None:
+                est_in_tokens = estimate_input_tokens(messages, system=p.system_prompt)
+                est_input_cost = estimate_cost_usd(model.model_id, est_in_tokens, 0)
+                threshold = INPUT_COST_CAP_FRACTION * p.max_cost_usd
+                if est_input_cost > threshold:
+                    return _input_too_large(
+                        p.name,
+                        started,
+                        tokens_in_total,
+                        tokens_out_total,
+                        cost_usd,
+                        model_calls,
+                        est_in_tokens,
+                        est_input_cost,
+                        threshold,
+                        p.max_cost_usd,
+                    )
+
             call = await model.respond(
                 system=p.system_prompt, messages=messages, tools=p.tools, tool_choice=p.tool_choice
             )
@@ -215,6 +241,48 @@ async def run_tool_loop(model: Model, p: LoopParams) -> SpecialistResult:
             f"last assistant text: {last_text[:300]}"
         ),
         status="aborted_cap",
+    )
+
+
+def _input_too_large(
+    name: str,
+    started: float,
+    tokens_in: int,
+    tokens_out: int,
+    cost_usd: float,
+    model_calls: int,
+    est_in_tokens: int,
+    est_input_cost: float,
+    threshold: float,
+    max_cost_usd: float,
+) -> SpecialistResult:
+    """Pre-flight gate: input-only cost would exceed 60% of the cap. Abort cleanly
+    so the operator sees a structured failure mode rather than a mid-stream cap
+    hit (which leaves a partial-cost row that's harder to interpret)."""
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    log.warning(
+        "specialist_input_too_large",
+        specialist=name,
+        est_input_tokens=est_in_tokens,
+        est_input_cost_usd=round(est_input_cost, 6),
+        threshold_usd=round(threshold, 6),
+        max_cost_usd=round(max_cost_usd, 6),
+    )
+    return SpecialistResult(
+        output=None,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+        cost_usd=cost_usd,
+        model_calls=model_calls,
+        duration_ms=duration_ms,
+        error=(
+            f"input_too_large: estimated input cost ${est_input_cost:.4f} for "
+            f"~{est_in_tokens} tokens would exceed {INPUT_COST_CAP_FRACTION*100:.0f}% of "
+            f"the ${max_cost_usd:.2f} cap (threshold ${threshold:.4f}). "
+            "Reduce data volume in tools (cap article counts, request fewer periods/series, "
+            "shorten filing sections)."
+        ),
+        status="input_too_large",
     )
 
 

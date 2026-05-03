@@ -22,6 +22,12 @@ from fii_agents.tools.shared import get_latest_macro_value, get_yield_curve
 
 log = structlog.get_logger(__name__)
 
+# Hard cap on FRED series included in any single tool response. Today no tool
+# returns more than ~3 series (classify_regime returns yield_curve / unrate /
+# nber_recession), so this is a forward-looking guard for any bulk-series
+# helper added later.
+MAX_MACRO_SERIES_PER_RESPONSE = 8
+
 
 @dataclass
 class MacroToolContext:

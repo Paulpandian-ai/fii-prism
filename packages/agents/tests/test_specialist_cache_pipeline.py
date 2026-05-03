@@ -17,7 +17,8 @@ Three scenarios are covered here:
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 from fii_agents.cache_policy import synthesis_max_attempts
@@ -490,3 +491,250 @@ async def test_fundamentals_default_cap_is_60_cents_and_normal_run_completes_wit
     assert result.model_calls == 4
 
     _wipe_cache(session_factory, sym)
+
+
+# --- 7. Tool-level input volume caps ----------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_news_tool_caps_at_30_articles_with_dedup(session_factory):
+    """The news tool must server-cap to 30 articles AND dedupe by content_hash so a
+    high-traffic symbol can't blow input tokens past the News $0.25 cost cap."""
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+
+    from fii_agents.tools.news import (
+        MAX_NEWS_ARTICLES_PER_RESPONSE,
+        NewsToolContext,
+        _get_recent_news,
+    )
+    from fii_db import NewsItem
+
+    sym = "TSTNEWS"
+    # Wipe any prior rows for this symbol.
+    with session_scope(session_factory) as s:
+        s.execute(delete(NewsItem).where(NewsItem.symbols.contains([sym])))
+
+    # Seed 60 unique articles + 5 duplicates of one content_hash.
+    rows = []
+    for i in range(60):
+        rows.append(
+            NewsItem(
+                content_hash=f"hash_{sym}_{i:04d}",
+                symbols=[sym],
+                headline=f"Headline {i}",
+                summary="Body of the article. Mentions earnings and outlook.",
+                url=f"https://example.com/{i}",
+                source="finnhub",
+                published_at=_dt(2026, 5, 1 + (i // 10), 12, 0, tzinfo=_UTC),
+            )
+        )
+    with session_scope(session_factory) as s:
+        s.add_all(rows)
+
+    out = _get_recent_news(NewsToolContext(factory=session_factory), sym, since_days=365, limit=100)
+    assert out["count"] == MAX_NEWS_ARTICLES_PER_RESPONSE == 30
+    assert out["deduplicated"] is True
+    # All returned items have distinct content_hashes (verified by uniqueness of news_id since
+    # we seeded with unique hashes).
+    news_ids = {it["news_id"] for it in out["items"]}
+    assert len(news_ids) == 30
+
+    # Cleanup.
+    with session_scope(session_factory) as s:
+        s.execute(delete(NewsItem).where(NewsItem.symbols.contains([sym])))
+
+
+def test_fundamentals_tool_caps_periods_to_8(session_factory):
+    """`get_income_statement` with periods>8 must return at most 8 rows."""
+    from fii_agents.tools.fundamentals import (
+        MAX_FUNDAMENTAL_PERIODS_PER_RESPONSE,
+        FundamentalsToolContext,
+        _get_statements,
+    )
+    from fii_db import FundamentalsQuarterly, StatementType
+
+    sym = "TSTFP"
+    _seed_ticker(session_factory, sym)
+    with session_scope(session_factory) as s:
+        s.execute(delete(FundamentalsQuarterly).where(FundamentalsQuarterly.symbol == sym))
+        # Seed 20 quarters of fundamentals so we can verify the cap.
+        for i in range(20):
+            year = 2021 + (i // 4)
+            quarter = (i % 4) + 1
+            month = quarter * 3
+            s.add(
+                FundamentalsQuarterly(
+                    symbol=sym,
+                    fiscal_period_end=date(year, month, 28),
+                    statement_type=StatementType.INCOME.value,
+                    fiscal_year=year,
+                    fiscal_quarter=quarter,
+                    revenue=Decimal("1000"),
+                    raw={},
+                    source="test",
+                )
+            )
+
+    ctx = FundamentalsToolContext(factory=session_factory, embedder=_Embedder(), raw_bucket=None)
+    result = _get_statements(ctx, sym, StatementType.INCOME, periods=20)
+    assert result["count"] == MAX_FUNDAMENTAL_PERIODS_PER_RESPONSE == 8
+    assert len(result["periods"]) == 8
+
+    with session_scope(session_factory) as s:
+        s.execute(delete(FundamentalsQuarterly).where(FundamentalsQuarterly.symbol == sym))
+
+
+# --- 8. News end-to-end: 30 articles + scripted model finishes under \$0.25 -------------
+
+
+@pytest.mark.asyncio
+async def test_news_specialist_completes_within_cost_cap_with_30_articles(
+    session_factory, monkeypatch
+):
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+
+    from fii_agents.cache_policy import cost_cap_usd
+    from fii_agents.model import MODEL_SONNET, ModelCall
+    from fii_agents.specialists.base import SpecialistContext
+    from fii_agents.specialists.news import NewsSentimentSpecialist
+    from fii_db import NewsItem
+
+    sym = "TSTNEWS2"
+    monkeypatch.delenv("FII_USE_FAKE_MODEL", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-no-real-call")
+
+    # Seed 30 distinct articles.
+    with session_scope(session_factory) as s:
+        s.execute(delete(NewsItem).where(NewsItem.symbols.contains([sym])))
+        for i in range(30):
+            s.add(
+                NewsItem(
+                    content_hash=f"hash_{sym}_{i:04d}",
+                    symbols=[sym],
+                    headline=f"News headline {i} for {sym}: earnings beat or miss",
+                    summary="Analyst commentary about quarterly performance and outlook.",
+                    url=f"https://example.com/{sym}/{i}",
+                    source="finnhub",
+                    published_at=_dt(2026, 5, 1 + i, 9, 0, tzinfo=_UTC),
+                )
+            )
+        _seed_ticker(session_factory, sym)
+
+    valid_output = '{"net_sentiment": 0.05, "articles_analyzed": 30, "top_positive_themes": [], "top_negative_themes": [], "anomaly_flags": [], "earnings_guidance_changes": [], "qualitative_summary": "30 articles inspected; sentiment near neutral.", "confidence": "medium"}'
+
+    turns = [
+        ModelCall(
+            text="Pulling recent news first.",
+            tool_calls=[
+                {
+                    "id": "n1",
+                    "name": "get_recent_news",
+                    "input": {"symbol": sym, "since_days": 30, "limit": 30},
+                }
+            ],
+            stop_reason="tool_use",
+            tokens_in=900,
+            tokens_out=160,
+            model=MODEL_SONNET,
+        ),
+        ModelCall(
+            text=valid_output,
+            tool_calls=[],
+            stop_reason="end_turn",
+            tokens_in=2400,  # the 30 wrapped articles arrive in this turn's input
+            tokens_out=400,
+            model=MODEL_SONNET,
+        ),
+    ]
+
+    class _ScriptedModel:
+        model_id = MODEL_SONNET
+        is_fake = False
+
+        def __init__(self) -> None:
+            self._i = 0
+
+        async def respond(self, *, system, messages, tools=None, tool_choice=None):
+            r = turns[self._i]
+            self._i += 1
+            return r
+
+    ctx = SpecialistContext(
+        symbol=sym,
+        analysis_id="00000000-0000-0000-0000-000000000000",
+        user_id="00000000-0000-0000-0000-000000000000",
+        factory=session_factory,
+        embedder=_Embedder(),
+        raw_bucket=None,
+    )
+    result = await NewsSentimentSpecialist().run(ctx, _ScriptedModel())
+
+    assert result.status == "ok", f"got {result.status}: {result.error}"
+    assert result.output is not None
+    assert result.output.articles_analyzed == 30
+    assert result.cost_usd < cost_cap_usd("news"), (
+        f"news cost ${result.cost_usd:.4f} must be < cap ${cost_cap_usd('news'):.2f}"
+    )
+    assert result.model_calls == 2
+
+    with session_scope(session_factory) as s:
+        s.execute(delete(NewsItem).where(NewsItem.symbols.contains([sym])))
+
+
+# --- 9. Pre-flight input_too_large status -----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_input_too_large_returns_clean_status_without_calling_model():
+    """If estimated input cost would exceed 60% of the cost cap before even
+    sending the request, the loop must abort with status='input_too_large' and
+    NEVER invoke the model. Cost stays at 0 because no API call was made."""
+    from fii_agents.specialists.llm_loop import (
+        INPUT_COST_CAP_FRACTION,
+        LoopParams,
+        run_tool_loop,
+    )
+    from fii_shared import FundamentalsOutput
+
+    # 800K chars ≈ 200K tokens; at Sonnet's $3/Mtok input rate that's $0.60 of input
+    # alone, well over 60% of a $0.30 cap.
+    huge_message = "X" * 800_000
+    cap = 0.30
+    monkeypatch_calls = {"n": 0}
+
+    async def _dispatch(name: str, input_: dict) -> dict:
+        return {}
+
+    class _ShouldNotBeCalledModel:
+        model_id = "claude-sonnet-4-6"
+        is_fake = False
+
+        async def respond(self, *, system, messages, tools=None, tool_choice=None):
+            monkeypatch_calls["n"] += 1
+            raise AssertionError("model.respond MUST NOT be called when input is too large")
+
+    p = LoopParams(
+        name="fundamentals",
+        system_prompt="Be brief.",
+        user_message=huge_message,
+        tools=[],
+        dispatch=_dispatch,
+        output_schema=FundamentalsOutput,
+        max_iterations=5,
+        max_calls=5,
+        max_cost_usd=cap,
+    )
+    result = await run_tool_loop(_ShouldNotBeCalledModel(), p)
+
+    assert result.status == "input_too_large"
+    assert result.cost_usd == 0.0
+    assert result.tokens_in == 0
+    assert result.tokens_out == 0
+    assert result.model_calls == 0
+    assert monkeypatch_calls["n"] == 0
+    assert "input_too_large" in (result.error or "")
+    assert "Reduce data volume" in (result.error or "")
+    # The error mentions the actual threshold so operators can diagnose.
+    assert f"{INPUT_COST_CAP_FRACTION*100:.0f}%" in (result.error or "")

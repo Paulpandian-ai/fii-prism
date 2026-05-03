@@ -36,6 +36,11 @@ MAX_SECTION_TOKENS = 15_000
 _APPROX_CHARS_PER_TOKEN = 4
 MAX_SECTION_CHARS = MAX_SECTION_TOKENS * _APPROX_CHARS_PER_TOKEN
 
+# Hard cap on the number of quarterly periods returned in a single tool call.
+# Trend analysis only needs the last ~2 years; sending all 20 quarters wasted
+# input tokens and pushed Fundamentals over its $0.60 cost cap.
+MAX_FUNDAMENTAL_PERIODS_PER_RESPONSE = 8
+
 FILING_TEXT_OPEN = "<filing_text>"
 FILING_TEXT_CLOSE = "</filing_text>"
 
@@ -106,7 +111,7 @@ TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "symbol": {"type": "string"},
-                "periods": {"type": "integer", "minimum": 1, "maximum": 40, "default": 8},
+                "periods": {"type": "integer", "minimum": 1, "maximum": 8, "default": 8},
             },
             "required": ["symbol"],
         },
@@ -118,7 +123,7 @@ TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "symbol": {"type": "string"},
-                "periods": {"type": "integer", "minimum": 1, "maximum": 40, "default": 8},
+                "periods": {"type": "integer", "minimum": 1, "maximum": 8, "default": 8},
             },
             "required": ["symbol"],
         },
@@ -130,7 +135,7 @@ TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "symbol": {"type": "string"},
-                "periods": {"type": "integer", "minimum": 1, "maximum": 40, "default": 8},
+                "periods": {"type": "integer", "minimum": 1, "maximum": 8, "default": 8},
             },
             "required": ["symbol"],
         },
@@ -142,7 +147,7 @@ TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "symbol": {"type": "string"},
-                "periods": {"type": "integer", "minimum": 1, "maximum": 40, "default": 8},
+                "periods": {"type": "integer", "minimum": 1, "maximum": 8, "default": 8},
             },
             "required": ["symbol"],
         },
@@ -355,6 +360,10 @@ def _get_statements(
 ) -> dict[str, Any]:
     from fii_db.session import session_scope
 
+    # Hard cap to keep input tokens bounded — 8 quarters covers 2 years and is
+    # plenty for trend analysis. The model can ask for more but we won't send
+    # more (input cost grows linearly otherwise).
+    effective_periods = min(int(periods or MAX_FUNDAMENTAL_PERIODS_PER_RESPONSE), MAX_FUNDAMENTAL_PERIODS_PER_RESPONSE)
     with session_scope(ctx.factory) as s:
         rows = (
             s.execute(
@@ -364,7 +373,7 @@ def _get_statements(
                     FundamentalsQuarterly.statement_type == statement_type.value,
                 )
                 .order_by(desc(FundamentalsQuarterly.fiscal_period_end))
-                .limit(periods)
+                .limit(effective_periods)
             )
             .scalars()
             .all()
@@ -374,6 +383,7 @@ def _get_statements(
         "symbol": symbol.upper(),
         "statement_type": statement_type.value,
         "count": len(rows),
+        "max_returned": MAX_FUNDAMENTAL_PERIODS_PER_RESPONSE,
         "periods": [_serialize_quarter(r) for r in rows],
     }
 

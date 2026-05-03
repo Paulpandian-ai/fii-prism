@@ -30,10 +30,11 @@ from fii_shared import (
 )
 from fii_shared.validation import ReprompTicket, try_parse
 
-from fii_agents.budget import estimate_cost_usd
+from fii_agents.budget import estimate_cost_usd, estimate_input_tokens
 from fii_agents.model import Model
 from fii_agents.prompts import FUNDAMENTALS_V1, load_active_prompt, render_prompt_text
 from fii_agents.specialists.base import SpecialistContext, SpecialistResult
+from fii_agents.specialists.llm_loop import INPUT_COST_CAP_FRACTION
 from fii_agents.tools.fundamentals import (
     TOOLS as FUNDAMENTALS_TOOLS,
 )
@@ -151,6 +152,37 @@ class FundamentalsSpecialist:
                         duration_ms=duration_ms,
                         error=f"fundamentals_aborted_cap: cost_cap_${max_cost:.2f}",
                         status="aborted_cap",
+                    )
+
+                # Pre-flight: input alone would exceed 60% of the cap → bail cleanly.
+                est_in_tokens = estimate_input_tokens(messages, system=system_prompt)
+                est_input_cost = estimate_cost_usd(model.model_id, est_in_tokens, 0)
+                threshold = INPUT_COST_CAP_FRACTION * max_cost
+                if est_input_cost > threshold:
+                    duration_ms = int((time.perf_counter() - start) * 1000)
+                    log.warning(
+                        "specialist_input_too_large",
+                        specialist="fundamentals",
+                        est_input_tokens=est_in_tokens,
+                        est_input_cost_usd=round(est_input_cost, 6),
+                        threshold_usd=round(threshold, 6),
+                        max_cost_usd=round(max_cost, 6),
+                    )
+                    return SpecialistResult(
+                        output=None,
+                        tokens_in=tokens_in_total,
+                        tokens_out=tokens_out_total,
+                        cost_usd=cost_usd,
+                        model_calls=model_calls,
+                        duration_ms=duration_ms,
+                        error=(
+                            f"input_too_large: estimated input cost ${est_input_cost:.4f} "
+                            f"for ~{est_in_tokens} tokens would exceed "
+                            f"{INPUT_COST_CAP_FRACTION*100:.0f}% of the ${max_cost:.2f} cap "
+                            f"(threshold ${threshold:.4f}). Reduce data volume in tools "
+                            "(fewer periods, shorter filing sections)."
+                        ),
+                        status="input_too_large",
                     )
 
                 call = await model.respond(

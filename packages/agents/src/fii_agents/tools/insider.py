@@ -16,6 +16,12 @@ from sqlalchemy.orm import sessionmaker
 
 log = structlog.get_logger(__name__)
 
+# Hard cap on Form 4 transactions returned per tool call. Active names can
+# easily produce 100+ transactions in 6 months (10b5-1 plans, RSU vesting,
+# director gifts) — most are programmatic noise. The 50 most recent retain
+# enough signal for the cluster-detection logic to work.
+MAX_FORM4_TRANSACTIONS_PER_RESPONSE = 50
+
 
 @dataclass
 class InsiderToolContext:
@@ -128,6 +134,8 @@ async def _route(name: str, input_: dict[str, Any], ctx: InsiderToolContext) -> 
 
 def _get_form4(ctx: InsiderToolContext, symbol: str, since_days: int) -> dict[str, Any]:
     cutoff = date.today() - timedelta(days=since_days)
+    # Pull the full window so net_dollars_trailing_90d below stays accurate, but
+    # only return the 50 most recent transactions to the LLM.
     with session_scope(ctx.factory) as s:
         rows = (
             s.execute(
@@ -141,7 +149,7 @@ def _get_form4(ctx: InsiderToolContext, symbol: str, since_days: int) -> dict[st
             .scalars()
             .all()
         )
-    items = [
+    all_items = [
         {
             "id": str(r.id),
             "insider_name": r.insider_name,
@@ -154,19 +162,24 @@ def _get_form4(ctx: InsiderToolContext, symbol: str, since_days: int) -> dict[st
         }
         for r in rows
     ]
+    # Compute net_dollars_trailing_90d from the FULL set (accuracy matters for
+    # the aggregate signal), then truncate the per-row list before serialization.
     net_dollars_90 = 0.0
     cutoff_90 = date.today() - timedelta(days=90)
-    for it in items:
+    for it in all_items:
         if it["price"] is None or it["shares"] is None:
             continue
         if date.fromisoformat(it["transaction_date"]) < cutoff_90:
             continue
         sign = 1.0 if (it["transaction_type"] or "").upper() in {"P", "A", "M"} else -1.0
         net_dollars_90 += sign * it["price"] * it["shares"]
+    items = all_items[:MAX_FORM4_TRANSACTIONS_PER_RESPONSE]
     return {
         "symbol": symbol.upper(),
         "since_days": since_days,
         "count": len(items),
+        "total_in_window": len(all_items),
+        "max_returned": MAX_FORM4_TRANSACTIONS_PER_RESPONSE,
         "transactions": items,
         "net_dollars_trailing_90d": net_dollars_90,
     }
