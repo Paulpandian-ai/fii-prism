@@ -132,6 +132,36 @@ def cost_cap_usd(name: str) -> float:
     )
 
 
+# --- In-prompt soft tool-call budget -----------------------------------------------------
+#
+# This is a SOFT hint baked into each specialist's system prompt — it tells Claude
+# how many tool calls to plan for. The Phase-1 hard cap (call_cap / cost_cap_usd
+# above) still bounds runaway behavior. Fundamentals has the most tools (FMP +
+# EDGAR + RAG + ratio calculators) and burns calls fastest, so it gets a wider
+# soft budget by default. Override per-specialist via FII_TOOL_BUDGET_<NAME>.
+
+_DEFAULT_TOOL_CALL_SOFT_BUDGET: Mapping[str, int] = {
+    "fundamentals": 22,
+}
+_DEFAULT_TOOL_CALL_SOFT_BUDGET_OTHER = 15
+
+
+def tool_call_soft_budget(name: str) -> int:
+    """Return the in-prompt tool-call budget for a specialist.
+
+    Defaults: 22 for fundamentals (which has the most tools), 15 for the rest.
+    Override via FII_TOOL_BUDGET_<NAME> env var.
+    """
+    name = canonical_name(name)
+    env = os.environ.get(f"FII_TOOL_BUDGET_{name.upper()}")
+    if env:
+        try:
+            return int(env)
+        except ValueError:
+            pass
+    return _DEFAULT_TOOL_CALL_SOFT_BUDGET.get(name, _DEFAULT_TOOL_CALL_SOFT_BUDGET_OTHER)
+
+
 # --- Synthesis-specific JSON-validity cap ------------------------------------------------
 
 DEFAULT_SYNTHESIS_MAX_ATTEMPTS = 3

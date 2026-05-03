@@ -91,93 +91,115 @@ async def run_tool_loop(model: Model, p: LoopParams) -> SpecialistResult:
     cost_usd = 0.0
     last_text = ""
 
-    for _ in range(p.max_iterations):
-        # Per-specialist hard caps. Checked BEFORE the next call so we never blow
-        # past the limit by 1 call / by the cost of one extra invocation.
-        if p.max_calls is not None and model_calls >= p.max_calls:
-            return _aborted_cap(
-                p.name,
-                started,
-                tokens_in_total,
-                tokens_out_total,
-                cost_usd,
-                model_calls,
-                last_text,
-                reason=f"call_cap_{p.max_calls}",
-            )
-        if p.max_cost_usd is not None and cost_usd >= p.max_cost_usd:
-            return _aborted_cap(
-                p.name,
-                started,
-                tokens_in_total,
-                tokens_out_total,
-                cost_usd,
-                model_calls,
-                last_text,
-                reason=f"cost_cap_${p.max_cost_usd:.2f}",
-            )
+    # Wrap the whole loop so a transient API error or tool exception still surfaces
+    # a SpecialistResult carrying the partial cost we accumulated — without this,
+    # the caller's exception handler would persist cost_usd=0 in the cache row.
+    try:
+        for _ in range(p.max_iterations):
+            # Per-specialist hard caps. Checked BEFORE the next call so we never blow
+            # past the limit by 1 call / by the cost of one extra invocation.
+            if p.max_calls is not None and model_calls >= p.max_calls:
+                return _aborted_cap(
+                    p.name,
+                    started,
+                    tokens_in_total,
+                    tokens_out_total,
+                    cost_usd,
+                    model_calls,
+                    last_text,
+                    reason=f"call_cap_{p.max_calls}",
+                )
+            if p.max_cost_usd is not None and cost_usd >= p.max_cost_usd:
+                return _aborted_cap(
+                    p.name,
+                    started,
+                    tokens_in_total,
+                    tokens_out_total,
+                    cost_usd,
+                    model_calls,
+                    last_text,
+                    reason=f"cost_cap_${p.max_cost_usd:.2f}",
+                )
 
-        call = await model.respond(
-            system=p.system_prompt, messages=messages, tools=p.tools, tool_choice=p.tool_choice
-        )
-        model_calls += 1
-        tokens_in_total += call.tokens_in
-        tokens_out_total += call.tokens_out
-        cost_usd += estimate_cost_usd(call.model, call.tokens_in, call.tokens_out)
-        last_text = call.text or last_text
-
-        if call.stop_reason == "tool_use" and call.tool_calls:
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": [
-                        *([{"type": "text", "text": call.text}] if call.text else []),
-                        *[
-                            {
-                                "type": "tool_use",
-                                "id": tc["id"],
-                                "name": tc["name"],
-                                "input": tc["input"],
-                            }
-                            for tc in call.tool_calls
-                        ],
-                    ],
-                }
+            call = await model.respond(
+                system=p.system_prompt, messages=messages, tools=p.tools, tool_choice=p.tool_choice
             )
-            results_block: dict[str, Any] = {"role": "user", "content": []}
-            for tc in call.tool_calls:
-                tool_result = await p.dispatch(tc["name"], tc["input"])
-                results_block["content"].append(
+            model_calls += 1
+            tokens_in_total += call.tokens_in
+            tokens_out_total += call.tokens_out
+            cost_usd += estimate_cost_usd(call.model, call.tokens_in, call.tokens_out)
+            last_text = call.text or last_text
+
+            if call.stop_reason == "tool_use" and call.tool_calls:
+                messages.append(
                     {
-                        "type": "tool_result",
-                        "tool_use_id": tc["id"],
-                        "content": json.dumps(tool_result, default=str),
+                        "role": "assistant",
+                        "content": [
+                            *([{"type": "text", "text": call.text}] if call.text else []),
+                            *[
+                                {
+                                    "type": "tool_use",
+                                    "id": tc["id"],
+                                    "name": tc["name"],
+                                    "input": tc["input"],
+                                }
+                                for tc in call.tool_calls
+                            ],
+                        ],
                     }
                 )
-            messages.append(results_block)
-            continue
+                results_block: dict[str, Any] = {"role": "user", "content": []}
+                for tc in call.tool_calls:
+                    tool_result = await p.dispatch(tc["name"], tc["input"])
+                    results_block["content"].append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tc["id"],
+                            "content": json.dumps(tool_result, default=str),
+                        }
+                    )
+                messages.append(results_block)
+                continue
 
-        parsed = try_parse(p.output_schema, _extract_json(call.text))
-        if isinstance(parsed, ReprompTicket):
-            messages.append({"role": "assistant", "content": call.text})
-            messages.append({"role": "user", "content": parsed.as_prompt()})
-            continue
+            parsed = try_parse(p.output_schema, _extract_json(call.text))
+            if isinstance(parsed, ReprompTicket):
+                messages.append({"role": "assistant", "content": call.text})
+                messages.append({"role": "user", "content": parsed.as_prompt()})
+                continue
 
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            log.info(
+                "specialist_real_complete",
+                specialist=p.name,
+                iterations=model_calls,
+                duration_ms=duration_ms,
+                cost_usd=round(cost_usd, 6),
+            )
+            return SpecialistResult(
+                output=parsed,
+                tokens_in=tokens_in_total,
+                tokens_out=tokens_out_total,
+                cost_usd=cost_usd,
+                model_calls=model_calls,
+                duration_ms=duration_ms,
+            )
+    except Exception as exc:
         duration_ms = int((time.perf_counter() - started) * 1000)
-        log.info(
-            "specialist_real_complete",
+        log.exception(
+            "specialist_real_exception",
             specialist=p.name,
             iterations=model_calls,
-            duration_ms=duration_ms,
             cost_usd=round(cost_usd, 6),
         )
         return SpecialistResult(
-            output=parsed,
+            output=None,
             tokens_in=tokens_in_total,
             tokens_out=tokens_out_total,
             cost_usd=cost_usd,
             model_calls=model_calls,
             duration_ms=duration_ms,
+            error=f"{p.name}_exception: {str(exc)[:300]}",
+            status="error",
         )
 
     duration_ms = int((time.perf_counter() - started) * 1000)
@@ -192,6 +214,7 @@ async def run_tool_loop(model: Model, p: LoopParams) -> SpecialistResult:
             f"{p.name}_max_iterations_exceeded ({p.max_iterations}); "
             f"last assistant text: {last_text[:300]}"
         ),
+        status="aborted_cap",
     )
 
 

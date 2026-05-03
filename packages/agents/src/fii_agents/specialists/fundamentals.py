@@ -32,7 +32,7 @@ from fii_shared.validation import ReprompTicket, try_parse
 
 from fii_agents.budget import estimate_cost_usd
 from fii_agents.model import Model
-from fii_agents.prompts import FUNDAMENTALS_V1, load_active_prompt
+from fii_agents.prompts import FUNDAMENTALS_V1, load_active_prompt, render_prompt_text
 from fii_agents.specialists.base import SpecialistContext, SpecialistResult
 from fii_agents.tools.fundamentals import (
     TOOLS as FUNDAMENTALS_TOOLS,
@@ -67,10 +67,19 @@ class FundamentalsSpecialist:
         )
         ratios = await dispatch("get_ratios", {"symbol": ctx.symbol, "periods": 4}, tool_ctx)
         ndebt = await dispatch("calculate_net_debt_to_ebitda", {"symbol": ctx.symbol}, tool_ctx)
+        latest_10k = await dispatch("get_latest_10k", {"symbol": ctx.symbol}, tool_ctx)
+        has_10k = bool(latest_10k) and bool(latest_10k.get("filing_id"))
 
-        output = _build_output_from_raw(ctx.symbol, income, ratios, ndebt, is_stub=True)
+        output = _build_output_from_raw(
+            ctx.symbol, income, ratios, ndebt, is_stub=True, has_10k=has_10k
+        )
         duration_ms = int((time.perf_counter() - start) * 1000)
-        log.info("fundamentals_fake_complete", symbol=ctx.symbol, duration_ms=duration_ms)
+        log.info(
+            "fundamentals_fake_complete",
+            symbol=ctx.symbol,
+            duration_ms=duration_ms,
+            has_10k=has_10k,
+        )
         return SpecialistResult(
             output=output,
             tokens_in=0,
@@ -89,7 +98,8 @@ class FundamentalsSpecialist:
         max_calls = call_cap("fundamentals")
         max_cost = cost_cap_usd("fundamentals")
 
-        prompt = load_active_prompt(ctx.factory, SpecialistName.FUNDAMENTALS) or FUNDAMENTALS_V1
+        prompt_record = load_active_prompt(ctx.factory, SpecialistName.FUNDAMENTALS) or FUNDAMENTALS_V1
+        system_prompt = render_prompt_text(prompt_record.text, specialist_name="fundamentals")
 
         tool_ctx = FundamentalsToolContext(
             factory=ctx.factory, embedder=ctx.embedder, raw_bucket=ctx.raw_bucket
@@ -117,90 +127,112 @@ class FundamentalsSpecialist:
         cost_usd = 0.0
         last_text = ""
 
-        for _ in range(min(MAX_ITERATIONS, max_calls)):
-            # Per-specialist cost cap (call cap is enforced by the loop bound above).
-            if cost_usd >= max_cost:
+        # Wrap the whole loop so a transient API error or tool exception still
+        # surfaces a SpecialistResult carrying the partial cost we accumulated —
+        # without this, the caller's exception handler persists cost_usd=0.
+        try:
+            for _ in range(min(MAX_ITERATIONS, max_calls)):
+                # Per-specialist cost cap (call cap is enforced by the loop bound above).
+                if cost_usd >= max_cost:
+                    duration_ms = int((time.perf_counter() - start) * 1000)
+                    log.warning(
+                        "specialist_aborted_cap",
+                        specialist="fundamentals",
+                        reason=f"cost_cap_${max_cost:.2f}",
+                        iterations=model_calls,
+                        cost_usd=round(cost_usd, 6),
+                    )
+                    return SpecialistResult(
+                        output=None,
+                        tokens_in=tokens_in_total,
+                        tokens_out=tokens_out_total,
+                        cost_usd=cost_usd,
+                        model_calls=model_calls,
+                        duration_ms=duration_ms,
+                        error=f"fundamentals_aborted_cap: cost_cap_${max_cost:.2f}",
+                        status="aborted_cap",
+                    )
+
+                call = await model.respond(
+                    system=system_prompt, messages=messages, tools=FUNDAMENTALS_TOOLS
+                )
+                model_calls += 1
+                tokens_in_total += call.tokens_in
+                tokens_out_total += call.tokens_out
+                cost_usd += estimate_cost_usd(call.model, call.tokens_in, call.tokens_out)
+                last_text = call.text or last_text
+
+                if call.stop_reason == "tool_use" and call.tool_calls:
+                    assistant_block = {
+                        "role": "assistant",
+                        "content": [
+                            *([{"type": "text", "text": call.text}] if call.text else []),
+                            *[
+                                {
+                                    "type": "tool_use",
+                                    "id": tc["id"],
+                                    "name": tc["name"],
+                                    "input": tc["input"],
+                                }
+                                for tc in call.tool_calls
+                            ],
+                        ],
+                    }
+                    messages.append(assistant_block)
+
+                    tool_results_block: dict[str, Any] = {"role": "user", "content": []}
+                    for tc in call.tool_calls:
+                        result = await dispatch(tc["name"], tc["input"], tool_ctx)
+                        tool_results_block["content"].append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tc["id"],
+                                "content": json.dumps(result, default=str),
+                            }
+                        )
+                    messages.append(tool_results_block)
+                    continue
+
+                # Non-tool stop: we expect JSON in call.text.
+                parsed = try_parse(FundamentalsOutput, _extract_json(call.text))
+                if isinstance(parsed, ReprompTicket):
+                    # Re-prompt once with the error feedback.
+                    messages.append({"role": "assistant", "content": call.text})
+                    messages.append({"role": "user", "content": parsed.as_prompt()})
+                    continue
+
                 duration_ms = int((time.perf_counter() - start) * 1000)
-                log.warning(
-                    "specialist_aborted_cap",
-                    specialist="fundamentals",
-                    reason=f"cost_cap_${max_cost:.2f}",
+                log.info(
+                    "fundamentals_real_complete",
+                    symbol=ctx.symbol,
                     iterations=model_calls,
-                    cost_usd=round(cost_usd, 6),
+                    duration_ms=duration_ms,
                 )
                 return SpecialistResult(
-                    output=None,
+                    output=parsed,
                     tokens_in=tokens_in_total,
                     tokens_out=tokens_out_total,
                     cost_usd=cost_usd,
                     model_calls=model_calls,
                     duration_ms=duration_ms,
-                    error=f"fundamentals_aborted_cap: cost_cap_${max_cost:.2f}",
-                    status="aborted_cap",
                 )
-
-            call = await model.respond(
-                system=prompt.text, messages=messages, tools=FUNDAMENTALS_TOOLS
-            )
-            model_calls += 1
-            tokens_in_total += call.tokens_in
-            tokens_out_total += call.tokens_out
-            cost_usd += estimate_cost_usd(call.model, call.tokens_in, call.tokens_out)
-            last_text = call.text or last_text
-
-            if call.stop_reason == "tool_use" and call.tool_calls:
-                assistant_block = {
-                    "role": "assistant",
-                    "content": [
-                        *([{"type": "text", "text": call.text}] if call.text else []),
-                        *[
-                            {
-                                "type": "tool_use",
-                                "id": tc["id"],
-                                "name": tc["name"],
-                                "input": tc["input"],
-                            }
-                            for tc in call.tool_calls
-                        ],
-                    ],
-                }
-                messages.append(assistant_block)
-
-                tool_results_block: dict[str, Any] = {"role": "user", "content": []}
-                for tc in call.tool_calls:
-                    result = await dispatch(tc["name"], tc["input"], tool_ctx)
-                    tool_results_block["content"].append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tc["id"],
-                            "content": json.dumps(result, default=str),
-                        }
-                    )
-                messages.append(tool_results_block)
-                continue
-
-            # Non-tool stop: we expect JSON in call.text.
-            parsed = try_parse(FundamentalsOutput, _extract_json(call.text))
-            if isinstance(parsed, ReprompTicket):
-                # Re-prompt once with the error feedback.
-                messages.append({"role": "assistant", "content": call.text})
-                messages.append({"role": "user", "content": parsed.as_prompt()})
-                continue
-
+        except Exception as exc:
             duration_ms = int((time.perf_counter() - start) * 1000)
-            log.info(
-                "fundamentals_real_complete",
+            log.exception(
+                "fundamentals_real_exception",
                 symbol=ctx.symbol,
                 iterations=model_calls,
-                duration_ms=duration_ms,
+                cost_usd=round(cost_usd, 6),
             )
             return SpecialistResult(
-                output=parsed,
+                output=None,
                 tokens_in=tokens_in_total,
                 tokens_out=tokens_out_total,
                 cost_usd=cost_usd,
                 model_calls=model_calls,
                 duration_ms=duration_ms,
+                error=f"fundamentals_exception: {str(exc)[:300]}",
+                status="error",
             )
 
         # Ran out of iterations without a valid output.
@@ -216,6 +248,7 @@ class FundamentalsSpecialist:
                 f"fundamentals_max_iterations_exceeded ({MAX_ITERATIONS}); "
                 f"last assistant text: {last_text[:300]}"
             ),
+            status="aborted_cap",
         )
 
 
@@ -241,9 +274,15 @@ def _build_output_from_raw(
     ndebt: dict[str, Any],
     *,
     is_stub: bool,
+    has_10k: bool = True,
 ) -> FundamentalsOutput:
     """Construct a FundamentalsOutput from raw tool results. Used by the fake path
-    and as the last-resort fallback when the real path fails schema validation."""
+    and as the last-resort fallback when the real path fails schema validation.
+
+    `has_10k=False` means EDGAR ingestion has not produced a 10-K for this symbol
+    yet — we still produce a valid output but flag the gap and downgrade
+    confidence so downstream synthesis treats it appropriately.
+    """
     fmp_src = SourceRef(
         source_type=SourceType.FMP_FUNDAMENTAL,
         source_id=f"fmp/aggregate/{symbol}",
@@ -258,6 +297,13 @@ def _build_output_from_raw(
         retrieved_at=datetime.now(UTC),
         url=None,
     )
+    missing_10k_src = SourceRef(
+        source_type=SourceType.CALCULATED,
+        source_id="filings/missing",
+        section=None,
+        retrieved_at=datetime.now(UTC),
+        url=None,
+    )
 
     periods = income.get("periods") or []
     revenue_ttm = _sum_last_four(periods, "revenue") or 0.0
@@ -267,6 +313,36 @@ def _build_output_from_raw(
 
     def _cn(value: float, unit: str, src: SourceRef = fmp_src) -> CitedNumber:
         return CitedNumber(value=value, unit=unit, as_of=date.today(), source=src)
+
+    auditor_flags: list[CitedClaim] = []
+    if not has_10k:
+        auditor_flags.append(
+            CitedClaim(
+                claim="10-K not ingested; analysis based on FMP statements only.",
+                sources=[missing_10k_src],
+                confidence="medium",
+            )
+        )
+
+    if is_stub and has_10k:
+        # Stub-with-10K still gets the lowest confidence — the LLM didn't run.
+        confidence = "low"
+    elif not has_10k:
+        # Missing 10-K is a real-world gap: medium per spec, regardless of stub.
+        confidence = "medium"
+    else:
+        confidence = "medium"
+
+    summary_prefix = (
+        "STUB fundamentals output — implement with real LLM key in Section 5. "
+        if is_stub
+        else ""
+    )
+    no_10k_caveat = (
+        " 10-K not ingested; analysis based on FMP statements only."
+        if not has_10k
+        else ""
+    )
 
     output = FundamentalsOutput(
         symbol=symbol.upper(),
@@ -280,7 +356,7 @@ def _build_output_from_raw(
         roic=_cn(float(latest_ratios.get("return_on_invested_capital") or 0.15), "ratio"),
         roic_vs_wacc_spread=_cn(0.05, "ratio", calc_src),
         interest_coverage=_cn(10.0, "ratio", calc_src),
-        auditor_flags=[],
+        auditor_flags=auditor_flags,
         accounting_red_flags=(
             [
                 CitedClaim(
@@ -293,12 +369,12 @@ def _build_output_from_raw(
             else []
         ),
         qualitative_summary=(
-            f"{'STUB fundamentals output — implement with real LLM key in Section 5. ' if is_stub else ''}"
+            f"{summary_prefix}"
             f"{symbol.upper()} shows stable margins and healthy cash conversion in the "
             "most recent quarters. Net leverage is modest and interest coverage is comfortable. "
-            "Trajectory consistent with a quality compounder."
+            f"Trajectory consistent with a quality compounder.{no_10k_caveat}"
         ),
-        confidence="low" if is_stub else "medium",
+        confidence=confidence,
     )
     return output
 
