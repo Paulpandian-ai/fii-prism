@@ -187,6 +187,37 @@ async def run_tool_loop(model: Model, p: LoopParams) -> SpecialistResult:
                 messages.append(results_block)
                 continue
 
+            # Anthropic-side truncation: the response hit max_tokens BEFORE
+            # the model finished emitting JSON. Retrying is pure waste — the
+            # same input produces the same ceiling hit. Reuses aborted_cap
+            # for taxonomy consistency. See specialists/fundamentals.py for
+            # the matching guard. This single guard covers every specialist
+            # routed through this shared runner (Valuation, Moat, Macro,
+            # Technical, News, Insider, Risk, Bull, Bear).
+            if call.stop_reason == "max_tokens":
+                duration_ms = int((time.perf_counter() - started) * 1000)
+                log.warning(
+                    "output_truncated_at_max_tokens",
+                    specialist=p.name,
+                    max_tokens=model.max_tokens,
+                    last_text=(call.text or "")[:300],
+                    cost_usd=round(cost_usd, 6),
+                )
+                return SpecialistResult(
+                    output=None,
+                    tokens_in=tokens_in_total,
+                    tokens_out=tokens_out_total,
+                    cost_usd=cost_usd,
+                    model_calls=model_calls,
+                    duration_ms=duration_ms,
+                    error=(
+                        f"output_truncated_at_max_tokens={model.max_tokens}: "
+                        "model.respond returned stop_reason='max_tokens' before "
+                        "emitting valid JSON"
+                    ),
+                    status="aborted_cap",
+                )
+
             parsed = try_parse(p.output_schema, _extract_json(call.text))
             if isinstance(parsed, ReprompTicket):
                 messages.append({"role": "assistant", "content": call.text})
@@ -277,7 +308,7 @@ def _input_too_large(
         duration_ms=duration_ms,
         error=(
             f"input_too_large: estimated input cost ${est_input_cost:.4f} for "
-            f"~{est_in_tokens} tokens would exceed {INPUT_COST_CAP_FRACTION*100:.0f}% of "
+            f"~{est_in_tokens} tokens would exceed {INPUT_COST_CAP_FRACTION * 100:.0f}% of "
             f"the ${max_cost_usd:.2f} cap (threshold ${threshold:.4f}). "
             "Reduce data volume in tools (cap article counts, request fewer periods/series, "
             "shorten filing sections)."

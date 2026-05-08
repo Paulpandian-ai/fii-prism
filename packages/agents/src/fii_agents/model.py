@@ -48,7 +48,19 @@ class ModelCall:
 class Model:
     """Minimal async facade. Callers pass messages + optional tools."""
 
-    def __init__(self, *, model_id: str = MODEL_SONNET, max_tokens: int = 4096) -> None:
+    # 16384 fits every specialist's realistic populated JSON output (≈3K tokens
+    # for the largest, OrchestratorFinalOutput) with ~5x headroom for LLM
+    # verbosity bloat (extra-field wrapping, occasional preamble before the
+    # JSON). Sonnet 4.6 supports up to 64K output tokens; max_tokens is a
+    # CEILING — the API only bills for tokens actually generated, so unused
+    # headroom costs nothing. The previous default of 4096 was tight enough
+    # that fully-populated FundamentalsOutput / OrchestratorFinalOutput would
+    # truncate mid-string, producing JSONDecodeError that classified as a
+    # parse failure and triggered the (now-bounded) MAX_PARSE_ATTEMPTS retry
+    # loop — 3 wasted calls per run, ~$0.43 per failed Fundamentals attempt.
+    # Callers that intentionally want a tighter ceiling (e.g. report_critic's
+    # sub-calls) explicitly pass smaller values.
+    def __init__(self, *, model_id: str = MODEL_SONNET, max_tokens: int = 16384) -> None:
         self.model_id = model_id
         self.max_tokens = max_tokens
         self._client: Any | None = None

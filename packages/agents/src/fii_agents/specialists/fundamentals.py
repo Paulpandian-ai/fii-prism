@@ -128,7 +128,9 @@ class FundamentalsSpecialist:
         max_calls = call_cap("fundamentals")
         max_cost = cost_cap_usd("fundamentals")
 
-        prompt_record = load_active_prompt(ctx.factory, SpecialistName.FUNDAMENTALS) or FUNDAMENTALS_V1
+        prompt_record = (
+            load_active_prompt(ctx.factory, SpecialistName.FUNDAMENTALS) or FUNDAMENTALS_V1
+        )
         system_prompt = render_prompt_text(prompt_record.text, specialist_name="fundamentals")
 
         # Propagate max_calls into the tool dispatch budget. Without this the
@@ -221,7 +223,7 @@ class FundamentalsSpecialist:
                         error=(
                             f"input_too_large: estimated input cost ${est_input_cost:.4f} "
                             f"for ~{est_in_tokens} tokens would exceed "
-                            f"{INPUT_COST_CAP_FRACTION*100:.0f}% of the ${max_cost:.2f} cap "
+                            f"{INPUT_COST_CAP_FRACTION * 100:.0f}% of the ${max_cost:.2f} cap "
                             f"(threshold ${threshold:.4f}). Reduce data volume in tools "
                             "(fewer periods, shorter filing sections)."
                         ),
@@ -267,6 +269,38 @@ class FundamentalsSpecialist:
                         )
                     messages.append(tool_results_block)
                     continue
+
+                # Anthropic-side truncation: the response hit max_tokens BEFORE
+                # the model finished emitting JSON. Retrying is pure waste —
+                # the same input produces the same ceiling hit. Surface as
+                # aborted_cap with a discriminating error so the operator sees
+                # the right diagnostic instead of N "JSON parse failure"
+                # rounds. Reuses aborted_cap for taxonomy consistency with the
+                # cost-cap and parse-retry-cap exits; the `error` field is the
+                # discriminator.
+                if call.stop_reason == "max_tokens":
+                    duration_ms = int((time.perf_counter() - start) * 1000)
+                    log.warning(
+                        "output_truncated_at_max_tokens",
+                        symbol=ctx.symbol,
+                        max_tokens=model.max_tokens,
+                        last_text=(call.text or "")[:300],
+                        cost_usd=round(cost_usd, 6),
+                    )
+                    return SpecialistResult(
+                        output=None,
+                        tokens_in=tokens_in_total,
+                        tokens_out=tokens_out_total,
+                        cost_usd=cost_usd,
+                        model_calls=model_calls,
+                        duration_ms=duration_ms,
+                        error=(
+                            f"output_truncated_at_max_tokens={model.max_tokens}: "
+                            "model.respond returned stop_reason='max_tokens' before "
+                            "emitting valid JSON"
+                        ),
+                        status="aborted_cap",
+                    )
 
                 # Non-tool stop: we expect JSON in call.text.
                 parsed = try_parse(FundamentalsOutput, _extract_json(call.text))
@@ -438,14 +472,10 @@ def _build_output_from_raw(
         confidence = "medium"
 
     summary_prefix = (
-        "STUB fundamentals output — implement with real LLM key in Section 5. "
-        if is_stub
-        else ""
+        "STUB fundamentals output — implement with real LLM key in Section 5. " if is_stub else ""
     )
     no_10k_caveat = (
-        " 10-K not ingested; analysis based on FMP statements only."
-        if not has_10k
-        else ""
+        " 10-K not ingested; analysis based on FMP statements only." if not has_10k else ""
     )
 
     output = FundamentalsOutput(

@@ -190,6 +190,47 @@ async def _real_synthesis(state: dict[str, Any], model: Model, started: float) -
         tokens_out += call.tokens_out
         calls += 1
         last = call.text or last
+
+        # Anthropic-side truncation: the response hit max_tokens BEFORE the
+        # model finished emitting JSON. Retrying is pure waste — the same
+        # input produces the same ceiling hit. Synthesis has the largest
+        # schema and the worst blast radius (its failure invalidates all 8
+        # cached specialist outputs that fed it), so we short-circuit to
+        # `synthesis_invalid` immediately rather than burning the parse-retry
+        # budget on a deterministic failure.
+        if call.stop_reason == "max_tokens":
+            log.warning(
+                "output_truncated_at_max_tokens",
+                specialist="synthesis",
+                max_tokens=model.max_tokens,
+                last_text=(call.text or "")[:300],
+                cost_usd=round(cost_usd, 6),
+            )
+            placeholder = _truncated_placeholder(state, last, model.max_tokens)
+            running = float(state.get("cost_running_total", 0.0)) + cost_usd
+            running_in = int(state.get("tokens_in_total", 0)) + tokens_in
+            running_out = int(state.get("tokens_out_total", 0)) + tokens_out
+            running_calls = int(state.get("model_calls_total", 0)) + calls
+            placeholder = placeholder.model_copy(
+                update={
+                    "cost_summary": CostSummary(
+                        total_usd=running,
+                        input_tokens=running_in,
+                        output_tokens=running_out,
+                        model_calls=running_calls,
+                    )
+                }
+            )
+            return {
+                "final": placeholder.model_dump(mode="json"),
+                "synthesis_status": "synthesis_invalid",
+                "cost_running_total": cost_usd,
+                "tokens_in_total": tokens_in,
+                "tokens_out_total": tokens_out,
+                "model_calls_total": calls,
+                "timings_ms": {"synthesis": int((time.perf_counter() - started) * 1000)},
+            }
+
         parsed = try_parse(OrchestratorFinalOutput, _extract_json(call.text))
         if isinstance(parsed, ReprompTicket):
             last_ticket = parsed
@@ -255,6 +296,72 @@ async def _real_synthesis(state: dict[str, Any], model: Model, started: float) -
     }
 
 
+def _truncated_placeholder(
+    state: dict[str, Any], last_text: str, max_tokens: int
+) -> OrchestratorFinalOutput:
+    """Placeholder for `output_truncated_at_max_tokens`. Distinct from
+    `_invalid_placeholder` so the audit trail tells operators the failure was
+    a max_tokens cutoff (fix: bump model max_tokens), not a schema error
+    (fix: prompt or upstream data).
+
+    `last_text` is intentionally NOT echoed into the thesis — raw model output
+    typically contains decimals or units that the numeric-claim validator
+    would reject. The full truncated text is preserved in the structlog
+    `output_truncated_at_max_tokens` event instead.
+    """
+    src = SourceRef(
+        source_type=SourceType.CALCULATED,
+        source_id="synthesis/truncated",
+        section=None,
+        retrieved_at=datetime.now(UTC),
+        url=None,
+    )
+    wrong = [
+        CitedClaim(
+            claim=(
+                "Synthesis output was truncated at the model's max_tokens "
+                "ceiling before emitting valid JSON; raise the budget."
+            ),
+            sources=[src],
+            confidence="low",
+        ),
+        CitedClaim(
+            claim="A larger output ceiling will let the model finish emitting the schema.",
+            sources=[src],
+            confidence="low",
+        ),
+        CitedClaim(
+            claim="Re-run synthesis after raising max_tokens before acting on this analysis.",
+            sources=[src],
+            confidence="low",
+        ),
+    ]
+    return OrchestratorFinalOutput(
+        symbol=state["symbol"].upper(),
+        analysis_id=state["analysis_id"],
+        recommendation="hold",
+        confidence="low",
+        fii_score=5.0,
+        thesis=(
+            f"{state['symbol'].upper()} synthesis output was truncated at "
+            f"max_tokens={max_tokens} before producing valid JSON; re-run with a "
+            "larger output budget. See the output_truncated_at_max_tokens "
+            "structlog event for the raw partial output."
+        ),
+        what_i_would_buy=None,
+        what_could_make_me_wrong=wrong,
+        time_horizon="long (years)",
+        specialist_summaries={},
+        stress_outcomes={},
+        cost_summary=CostSummary(
+            total_usd=float(state.get("cost_running_total", 0.0)),
+            input_tokens=int(state.get("tokens_in_total", 0)),
+            output_tokens=int(state.get("tokens_out_total", 0)),
+            model_calls=int(state.get("model_calls_total", 0)),
+        ),
+    )
+
+
 def _invalid_placeholder(
     state: dict[str, Any], last_text: str, ticket: ReprompTicket | None
 ) -> OrchestratorFinalOutput:
@@ -268,7 +375,9 @@ def _invalid_placeholder(
         url=None,
     )
     err = (
-        "; ".join(ticket.errors) if ticket and ticket.errors else "model output failed schema validation"
+        "; ".join(ticket.errors)
+        if ticket and ticket.errors
+        else "model output failed schema validation"
     )
     wrong = [
         CitedClaim(
