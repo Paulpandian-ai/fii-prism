@@ -47,6 +47,27 @@ log = structlog.get_logger(__name__)
 
 MAX_ITERATIONS = 20
 
+# Hard ceiling on how many times the LLM can return a schema-invalid JSON before
+# we give up and surface `aborted_cap`. Mirrors `synthesis_max_attempts()` for
+# synthesis. Rationale: each parse retry replays the FULL accumulated tool-result
+# context (~18-22K input tokens for a comprehensive run) plus a fresh JSON
+# attempt as output — ~$0.05-0.07 per retry at Sonnet rates. Without a cap an
+# LLM stuck in a validator-feedback loop burns $0.30+ before the cost cap fires
+# at $0.60. Three is enough to recover from a transient slip; more is mostly
+# wasted on validators the LLM can't satisfy in this prompt cycle.
+#
+# Real-mode-only behavior: `_run_fake` builds FundamentalsOutput in Python via
+# _build_output_from_raw (no JSON parse, no ReprompTicket) so this cap never
+# runs in fake mode. CI (which runs FII_USE_FAKE_MODEL=1) consequently doesn't
+# exercise this path; coverage is via the dedicated unit tests in
+# packages/agents/tests/test_fundamentals_parse_retry_cap.py.
+#
+# Sibling specialists (Valuation, Moat, Macro, Technical, News, Insider, Risk,
+# Bull, Bear) share the same unbounded-retry pattern in
+# packages/agents/src/fii_agents/specialists/llm_loop.py:191-194. Out of scope
+# for this PR; will be batched in a follow-up.
+MAX_PARSE_ATTEMPTS = 3
+
 
 class FundamentalsSpecialist:
     name = "fundamentals"
@@ -146,6 +167,9 @@ class FundamentalsSpecialist:
         model_calls = 0
         cost_usd = 0.0
         last_text = ""
+        # Bounded parse-retry tracking — see MAX_PARSE_ATTEMPTS comment above.
+        parse_attempts = 0
+        last_ticket: ReprompTicket | None = None
 
         # Wrap the whole loop so a transient API error or tool exception still
         # surfaces a SpecialistResult carrying the partial cost we accumulated —
@@ -247,10 +271,39 @@ class FundamentalsSpecialist:
                 # Non-tool stop: we expect JSON in call.text.
                 parsed = try_parse(FundamentalsOutput, _extract_json(call.text))
                 if isinstance(parsed, ReprompTicket):
-                    # Re-prompt once with the error feedback.
-                    messages.append({"role": "assistant", "content": call.text})
-                    messages.append({"role": "user", "content": parsed.as_prompt()})
-                    continue
+                    parse_attempts += 1
+                    last_ticket = parsed
+                    if parse_attempts < MAX_PARSE_ATTEMPTS:
+                        messages.append({"role": "assistant", "content": call.text})
+                        messages.append({"role": "user", "content": parsed.as_prompt()})
+                        continue
+                    # Attempt cap exhausted — stop spending. Surface the last
+                    # validator errors so the operator can see what the LLM
+                    # kept failing on. Reuse aborted_cap for taxonomy
+                    # consistency with the cost-cap and synthesis-cap exits;
+                    # the `error` field discriminates the specific cause.
+                    duration_ms = int((time.perf_counter() - start) * 1000)
+                    log.warning(
+                        "fundamentals_schema_invalid_after_max_attempts",
+                        symbol=ctx.symbol,
+                        attempts=parse_attempts,
+                        last_validation_errors=list(last_ticket.errors),
+                        last_text=(last_text or "")[:300],
+                        cost_usd=round(cost_usd, 6),
+                    )
+                    return SpecialistResult(
+                        output=None,
+                        tokens_in=tokens_in_total,
+                        tokens_out=tokens_out_total,
+                        cost_usd=cost_usd,
+                        model_calls=model_calls,
+                        duration_ms=duration_ms,
+                        error=(
+                            f"fundamentals_schema_invalid_after_{MAX_PARSE_ATTEMPTS}_attempts: "
+                            f"{'; '.join(last_ticket.errors)[:300]}"
+                        ),
+                        status="aborted_cap",
+                    )
 
                 duration_ms = int((time.perf_counter() - start) * 1000)
                 log.info(
