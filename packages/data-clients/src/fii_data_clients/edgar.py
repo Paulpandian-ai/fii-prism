@@ -134,12 +134,40 @@ class EdgarClient:
             text = None
 
         sections: dict[str, str] | None = None
-        # edgartools exposes `obj()` for TenK/TenQ which has `.items` section splits.
+        # edgartools 5.30.2 changed `TenK.items` / `TenQ.items` from a
+        # dict[str, str] to a list[str] of "Item X" names; the body text now
+        # lives behind __getitem__ on the typed wrapper. We tolerate either
+        # shape so a future revert (or a third shape) doesn't reintroduce
+        # the silent-zero-sections regression.
         try:
             typed = filing.obj()
             items = getattr(typed, "items", None)
-            if items:
-                sections = {k: str(v) for k, v in items.items() if v}
+            if isinstance(items, list) and items:
+                sections = {}
+                skipped: list[tuple[str, str]] = []
+                for name in items:
+                    try:
+                        body = typed[name]
+                    except Exception as item_exc:
+                        skipped.append((str(name), type(item_exc).__name__))
+                        continue
+                    if body:
+                        sections[str(name)] = str(body)
+                if skipped:
+                    # One log line summarises the whole batch so a future
+                    # edgartools schema shift surfaces with the affected names.
+                    log.warning(
+                        "edgar_section_items_skipped",
+                        symbol=symbol,
+                        form=form,
+                        count=len(skipped),
+                        details=skipped,
+                    )
+                if not sections:
+                    sections = None  # downstream falls back to whole-filing chunking
+            elif isinstance(items, dict) and items:
+                # Backward-compat for older edgartools that returned a dict.
+                sections = {str(k): str(v) for k, v in items.items() if v}
         except Exception as exc:
             log.warning(
                 "edgar_parse_failed",
@@ -149,6 +177,7 @@ class EdgarClient:
                 exc=str(exc),
                 exc_type=type(exc).__name__,
             )
+            sections = None
 
         record = FilingRecord(
             accession_no=str(filing.accession_no),

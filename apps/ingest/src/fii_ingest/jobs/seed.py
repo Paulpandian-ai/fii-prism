@@ -188,15 +188,18 @@ async def seed_ticker(
                 f"filings: skipped — {reason}. Set VOYAGE_API_KEY or fix Bedrock to enable."
             )
         else:
+            # ingest_latest_10k / 10q now own their own transactions internally
+            # (two-phase: filing+chunks, then embed). Pass the factory, not a
+            # session — same shape as synthesis_runner.synthesize_from_cache.
+
             async def _do_10k():
-                with session_scope(factory) as s:
-                    return await ingest_latest_10k(
-                        s,
-                        edgar=edgar,
-                        embedder=embedder,
-                        symbol=symbol,
-                        raw_bucket=settings.raw_data_bucket,
-                    )
+                return await ingest_latest_10k(
+                    factory,
+                    edgar=edgar,
+                    embedder=embedder,
+                    symbol=symbol,
+                    raw_bucket=settings.raw_data_bucket,
+                )
 
             r10k, exc10k = await _step(symbol=symbol, name="10k", fn=_do_10k)
             if exc10k is not None:
@@ -204,16 +207,20 @@ async def seed_ticker(
             elif r10k is not None:
                 report.filings_10k = 1 if r10k["filing_id"] else 0
                 report.filing_chunks += int(r10k["chunks"])
+                if int(r10k.get("chunks", 0)) and not int(r10k.get("embedded", 0)):
+                    report.errors.append(
+                        f"edgar_filings_10k: chunks persisted but embedding pending — run "
+                        f"`fii-ingest backfill-embeddings --ticker {symbol.upper()}`"
+                    )
 
             async def _do_10q():
-                with session_scope(factory) as s:
-                    return await ingest_latest_10q(
-                        s,
-                        edgar=edgar,
-                        embedder=embedder,
-                        symbol=symbol,
-                        raw_bucket=settings.raw_data_bucket,
-                    )
+                return await ingest_latest_10q(
+                    factory,
+                    edgar=edgar,
+                    embedder=embedder,
+                    symbol=symbol,
+                    raw_bucket=settings.raw_data_bucket,
+                )
 
             r10q, exc10q = await _step(symbol=symbol, name="10q", fn=_do_10q)
             if exc10q is not None:
@@ -221,6 +228,11 @@ async def seed_ticker(
             elif r10q is not None:
                 report.filings_10q = 1 if r10q["filing_id"] else 0
                 report.filing_chunks += int(r10q["chunks"])
+                if int(r10q.get("chunks", 0)) and not int(r10q.get("embedded", 0)):
+                    report.errors.append(
+                        f"edgar_filings_10q: chunks persisted but embedding pending — run "
+                        f"`fii-ingest backfill-embeddings --ticker {symbol.upper()}`"
+                    )
 
     # --- Insider transactions ------------------------------------------------------------
     try:

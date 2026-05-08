@@ -132,7 +132,6 @@ def filings_cmd(
 ) -> None:
     from fii_data_clients import EdgarClient, make_embedder
     from fii_db import get_engine, get_session_factory
-    from fii_db.session import session_scope
 
     from fii_ingest.jobs.filings import ingest_latest_10k, ingest_latest_10q
 
@@ -143,22 +142,22 @@ def filings_cmd(
         factory = get_session_factory(engine)
         edgar = EdgarClient()
         embedder = make_embedder() if not no_embeddings else _NoopEmbedder()
-        with session_scope(factory) as s:
-            r10k = await ingest_latest_10k(
-                s,
-                edgar=edgar,
-                embedder=embedder,
-                symbol=ticker,
-                raw_bucket=settings.raw_data_bucket,
-            )
-        with session_scope(factory) as s:
-            r10q = await ingest_latest_10q(
-                s,
-                edgar=edgar,
-                embedder=embedder,
-                symbol=ticker,
-                raw_bucket=settings.raw_data_bucket,
-            )
+        # ingest_latest_10k/10q now own their own transactions (two-phase: filing
+        # row + chunks first, then embed). They take a sessionmaker, not a session.
+        r10k = await ingest_latest_10k(
+            factory,
+            edgar=edgar,
+            embedder=embedder,
+            symbol=ticker,
+            raw_bucket=settings.raw_data_bucket,
+        )
+        r10q = await ingest_latest_10q(
+            factory,
+            edgar=edgar,
+            embedder=embedder,
+            symbol=ticker,
+            raw_bucket=settings.raw_data_bucket,
+        )
         return {"10-K": r10k, "10-Q": r10q}
 
     result = asyncio.run(_run())
@@ -404,6 +403,105 @@ def _render_seed_table(summary: dict) -> None:
         console.print("[yellow]Warnings / errors:[/yellow]")
         for err in summary["errors"]:
             console.print(f"  • {err}")
+
+
+@app.command("backfill-embeddings")
+def backfill_embeddings_cmd(
+    ticker: str | None = typer.Option(
+        None, "--ticker", "-t", help="Only backfill chunks for this symbol; omit for all"
+    ),
+    batch_size: int = typer.Option(64, "--batch-size", help="Embedder batch size"),
+) -> None:
+    """Embed any filing_chunks rows with status='pending' AND embedding IS NULL.
+
+    Recovery path for the case where the embedder (Voyage / Bedrock) was rate-limited
+    or unavailable when the filing was first ingested. Idempotent — running it twice
+    is a no-op the second time because the predicate filters on
+    embedding_status='pending' AND embedding IS NULL.
+    """
+    from fii_data_clients import make_embedder
+    from fii_db import FilingChunk, get_engine, get_session_factory
+    from fii_db.session import session_scope
+    from sqlalchemy import select
+    from sqlalchemy import update as sql_update
+
+    settings = get_settings()
+    engine = get_engine(settings.database_url or "")
+    factory = get_session_factory(engine)
+
+    async def _run() -> dict[str, int]:
+        embedder = make_embedder()
+        sym_upper = ticker.upper() if ticker else None
+
+        # Load pending rows in one shot — the volume per ticker is small enough
+        # (a couple of 10-Ks ≈ 200-800 chunks). Idempotency guard: predicate
+        # requires both status='pending' AND embedding IS NULL so a partial-
+        # update failure that left rows in an inconsistent state can't double-bill.
+        with session_scope(factory) as s:
+            stmt = select(
+                FilingChunk.chunk_id,
+                FilingChunk.filing_id,
+                FilingChunk.symbol,
+                FilingChunk.chunk_index,
+                FilingChunk.chunk_text,
+            ).where(
+                FilingChunk.embedding_status == "pending",
+                FilingChunk.embedding.is_(None),
+            )
+            if sym_upper:
+                stmt = stmt.where(FilingChunk.symbol == sym_upper)
+            rows = list(s.execute(stmt).all())
+
+        if not rows:
+            console.print("[cyan]No pending chunks to backfill — nothing to do.[/cyan]")
+            return {"pending": 0, "embedded": 0, "failed": 0}
+
+        console.print(
+            f"[cyan]Backfilling {len(rows)} pending chunk(s)"
+            + (f" for {sym_upper}" if sym_upper else " across all symbols")
+            + ".[/cyan]"
+        )
+
+        ok = 0
+        failed_batches = 0
+        for i in range(0, len(rows), batch_size):
+            batch = rows[i : i + batch_size]
+            texts = [r.chunk_text for r in batch]
+            try:
+                result = await embedder.embed(texts, input_type="document")
+            except Exception as exc:
+                # Per-batch failure — keep going. The next backfill attempt
+                # picks up whatever this run didn't manage.
+                failed_batches += 1
+                console.print(
+                    f"[yellow]Batch {i // batch_size}: embed failed "
+                    f"({type(exc).__name__}: {exc}); leaving pending.[/yellow]"
+                )
+                continue
+            with session_scope(factory) as s:
+                for r, vec in zip(batch, result.vectors, strict=True):
+                    s.execute(
+                        sql_update(FilingChunk)
+                        .where(FilingChunk.chunk_id == r.chunk_id)
+                        .values(
+                            embedding=vec,
+                            embedding_model=result.model,
+                            embedding_status="ok",
+                        )
+                    )
+            ok += len(batch)
+            console.print(
+                f"[green]Batch {i // batch_size}: embedded {len(batch)} "
+                f"({result.tokens} tokens, ${result.cost_usd:.6f}).[/green]"
+            )
+
+        return {"pending": len(rows), "embedded": ok, "failed": len(rows) - ok}
+
+    summary = asyncio.run(_run())
+    console.print(
+        f"[bold]Done.[/bold] {summary['embedded']} embedded, "
+        f"{summary['failed']} still pending."
+    )
 
 
 class _NoopEmbedder:

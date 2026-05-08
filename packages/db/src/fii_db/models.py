@@ -265,6 +265,13 @@ class FilingChunk(Base):
     token_count: Mapped[int | None] = mapped_column(Integer)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1024))
     embedding_model: Mapped[str | None] = mapped_column(String(64))
+    # 'pending' until the embedder fills the vector; 'ok' once populated.
+    # Lets the filing-store path commit chunk text BEFORE attempting embed,
+    # so a transient Voyage / Bedrock failure doesn't lose the EDGAR fetch.
+    # Backfill predicate: embedding_status='pending' AND embedding IS NULL.
+    embedding_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="pending"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
