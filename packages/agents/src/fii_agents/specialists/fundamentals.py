@@ -59,9 +59,17 @@ class FundamentalsSpecialist:
     # --- Fake path: read real DB, return schema-valid output, skip the LLM --------------
 
     async def _run_fake(self, ctx: SpecialistContext) -> SpecialistResult:
+        from fii_agents.cache_policy import call_cap
+
         start = time.perf_counter()
+        # Same max_calls wiring as _run_real for consistency. Fake mode only
+        # issues 4 dispatches today so the dataclass default of 15 never bit,
+        # but the inconsistency was sloppy.
         tool_ctx = FundamentalsToolContext(
-            factory=ctx.factory, embedder=ctx.embedder, raw_bucket=ctx.raw_bucket
+            factory=ctx.factory,
+            embedder=ctx.embedder,
+            raw_bucket=ctx.raw_bucket,
+            max_calls=call_cap("fundamentals"),
         )
         income = await dispatch(
             "get_income_statement", {"symbol": ctx.symbol, "periods": 12}, tool_ctx
@@ -102,8 +110,19 @@ class FundamentalsSpecialist:
         prompt_record = load_active_prompt(ctx.factory, SpecialistName.FUNDAMENTALS) or FUNDAMENTALS_V1
         system_prompt = render_prompt_text(prompt_record.text, specialist_name="fundamentals")
 
+        # Propagate max_calls into the tool dispatch budget. Without this the
+        # FundamentalsToolContext dataclass default (15) silently shadows the
+        # cache_policy.call_cap value (25) and the prompt-stated soft budget
+        # (22). The LLM was told "you have 22 tool calls", planned for that,
+        # and tripped on the inner 15 cap with no chance to emit final JSON.
+        # The asymmetric headroom (prompt=22 vs hard=25) is intentional —
+        # visible budget nudges planning, silent buffer absorbs reasonable
+        # overshoot.
         tool_ctx = FundamentalsToolContext(
-            factory=ctx.factory, embedder=ctx.embedder, raw_bucket=ctx.raw_bucket
+            factory=ctx.factory,
+            embedder=ctx.embedder,
+            raw_bucket=ctx.raw_bucket,
+            max_calls=max_calls,
         )
 
         messages: list[dict[str, Any]] = [
