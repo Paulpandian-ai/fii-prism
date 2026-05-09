@@ -156,8 +156,9 @@ class FundamentalsSpecialist:
                         "type": "text",
                         "text": (
                             f"Analyze {ctx.symbol}. Use the provided tools to pull the "
-                            "financial statements, recent 10-K, and compute any ratios you "
-                            "need. Produce a FundamentalsOutput as valid JSON."
+                            "financial statements, recent 10-K, and compute the ratios "
+                            "needed for the FundamentalsOutput schema. Produce a "
+                            "FundamentalsOutput as valid JSON."
                         ),
                     }
                 ],

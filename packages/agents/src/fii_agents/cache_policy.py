@@ -116,7 +116,16 @@ DEFAULT_PER_SPECIALIST_COST_CAP_USD = 0.25
 # cap (synthesis_max_attempts), but the cost lookup is here so future
 # enforcement can read from the same source.
 _DEFAULT_COST_CAP_USD: Mapping[str, float] = {
-    "fundamentals": 0.60,
+    # Headroom for a legitimate comprehensive run AFTER the prompt's STOP
+    # CONDITION lands (4 statement pulls + 1 10-K + 1 net-debt + up to 3
+    # CAGRs + up to 3 filing reads + 1 final-emit turn ≈ 12-13 model turns
+    # at ~$0.04-0.07 per turn = $0.50-0.90 typical, $1.20 worst-case for
+    # data-rich names). The previous $0.60 ceiling fired before the LLM
+    # could finish a legitimate run. $1.50 still catches runaway loops:
+    # the in-prompt soft budget (22 calls) and the hard call cap (25)
+    # remain unchanged, so a model that ignores STOP CONDITION still
+    # terminates on the call cap before the new cost cap matters.
+    "fundamentals": 1.50,
     "moat": 0.40,
     "valuation": 0.40,
     "synthesis": 0.40,
@@ -169,9 +178,7 @@ def cost_cap_usd(name: str) -> float:
         return _DEFAULT_COST_CAP_USD[name]
     fallback = os.environ.get(
         "FII_COST_CAP_DEFAULT",
-        os.environ.get(
-            "FII_CAP_COST_USD_DEFAULT", str(DEFAULT_PER_SPECIALIST_COST_CAP_USD)
-        ),
+        os.environ.get("FII_CAP_COST_USD_DEFAULT", str(DEFAULT_PER_SPECIALIST_COST_CAP_USD)),
     )
     try:
         return float(fallback)
